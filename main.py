@@ -102,7 +102,7 @@ class Camera(Point3D):
         self.fov = 1
 
 def calcRotation(rel, rotation):
-    rel *= 1
+    rel = rel*1
 
     radius = calculate_distance(rel.x, rel.y)
     angle = calculate_angle(rel.x, rel.y)
@@ -139,8 +139,8 @@ class Group(Point3D):
         else:
             position = position + self.position
 
-        position = calcRotation(position, rotation)
-        position = calcRotation(position, self.rotation)
+        newPos = calcRotation(self.position, self.rotation+rotation)
+        position += calcRotation(newPos, rotation)
 
         for c in range(0, len(self.children)):
             child = self.children[c]
@@ -153,11 +153,12 @@ class Group(Point3D):
 
             rel = cPos * 1 #+ position
 
-            rel = calcRotation(rel, rotation)
-            rel = calcRotation(rel, self.rotation)
             rel += position
             if isinstance(child, Group):
                 rel = child.transform(rel, rotation)
+
+            rel = calcRotation(rel, self.rotation + rotation)
+            #rel = calcRotation(rel, rotation)
 
             if isinstance(child, Coordinate):
                 child.transformed = rel
