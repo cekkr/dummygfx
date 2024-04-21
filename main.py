@@ -157,16 +157,15 @@ class Group(Point3D):
             if isinstance(child, Group):
                 rel = child.transform(rel, rotation)
 
+            #rel -= position
             rel = calcRotation(rel, self.rotation + rotation)
+            #rel += position
             #rel = calcRotation(rel, rotation)
 
             if isinstance(child, Coordinate):
                 child.transformed = rel
             else:
                 child.transformedPosition = rel
-
-            #if isinstance(child, Group):
-            #    child.transform(rel, rotation)
 
         return position
 
@@ -212,7 +211,7 @@ class Camera(Group):
 
     def render(self, scene, pygame, screen):
         scene.reset()
-        scene.transform(self.position*-1, self.rotation)
+        scene.transform(self.position, self.rotation)
 
         width = screen.get_width()
         height = screen.get_height()
@@ -241,20 +240,21 @@ class Camera(Group):
         list = scene.list()
         for obj in list:
             if isinstance(obj, Triangle):
-                vertices = []
-                for vertex in obj.vertices:
-                    pos = posToScreen(vertex.transformed)
-                    if pos.x > 0 and pos.x < width:
-                        if pos.y > 0 and pos.y < height:
-                            vertices.append(pos)
+                if obj.transformedPosition.z < 0:
+                    vertices = []
+                    for vertex in obj.vertices:
+                        pos = posToScreen(vertex.transformed)
+                        if pos.x > 0 and pos.x < width:
+                            if pos.y > 0 and pos.y < height:
+                                vertices.append(pos)
 
-                for i in range(0, len(vertices)):
-                    next = (i+1)%len(vertices)
-                    if vertices[i].z > 0 or vertices[next].z > 0:
-                        pygame.draw.line(screen, (0,255,0), (vertices[i].x, vertices[i].y), (vertices[next].x, vertices[next].y), 2)
+                    for i in range(0, len(vertices)):
+                        next = (i+1)%len(vertices)
+                        if vertices[i].z > 0 or vertices[next].z > 0:
+                            pygame.draw.line(screen, (0,255,0), (vertices[i].x, vertices[i].y), (vertices[next].x, vertices[next].y), 2)
             else:
-                pos = posToScreen(obj.transformedPosition)
-                if pos.z > 0:
+                if obj.transformedPosition.z < 0:
+                    pos = posToScreen(obj.transformedPosition)
                     if pos.x > 0 and pos.x < width:
                         if pos.y > 0 and pos.y < height:
                             drawCircle(pygame, pos.x, pos.y, pos.z)
@@ -283,7 +283,7 @@ scene.add(triangle)
 scene.add(triangle2)
 
 camera = Camera()
-camera.position.z = 10
+camera.position.z = -10
 
 # Initialize Pygame
 pygame.init()
