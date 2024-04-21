@@ -1,6 +1,7 @@
 import pygame
 import random
 import math
+from PIL import Image
 
 def find_intersections(radius, angle_degrees):
     # Convert angle from degrees to radians
@@ -41,6 +42,34 @@ def point_on_unit_circle(degrees, moveBy=1.0):
 
     return (x*moveBy, y*moveBy)
 
+
+def sign(p1, p2, p3):
+    return (p1[0] - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (p1[1] - p3[1])
+
+
+def point_in_triangle(pt, v1, v2, v3):
+    d1 = sign(pt, v1, v2)
+    d2 = sign(pt, v2, v3)
+    d3 = sign(pt, v3, v1)
+    has_neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
+    has_pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
+    return not (has_neg and has_pos)
+
+
+def pixels_in_triangle(v1, v2, v3):
+    # Determine the bounding box of the triangle
+    min_x = min(v1[0], v2[0], v3[0])
+    max_x = max(v1[0], v2[0], v3[0])
+    min_y = min(v1[1], v2[1], v3[1])
+    max_y = max(v1[1], v2[1], v3[1])
+
+    pixels = []
+    for x in range(min_x, max_x + 1):
+        for y in range(min_y, max_y + 1):
+            if point_in_triangle((x, y), v1, v2, v3):
+                pixels.append((x, y))
+
+    return pixels
 
 ###
 ###
@@ -95,6 +124,7 @@ class Point3D:
         self.rotation = Coordinate()
         self.transformedPosition = None
         self.transformedRotation = None
+        self.parent = None
 
 class Camera(Point3D):
     def __init__(self):
@@ -128,9 +158,11 @@ class Group(Point3D):
     def __init__(self):
         super().__init__()
         self.children = []
+        self.texture = None
 
     def add(self, obj):
         self.children.append(obj)
+        obj.parent = self
 
     def transform(self, position=None, rotation=None):
 
@@ -197,6 +229,10 @@ class Triangle(Group):
         for i in range(0,3):
             self.vertices.append(Coordinate())
 
+class Mesh(Group):
+    def __init__(self):
+        super().__init__()
+        self.texture = None
 
 def drawCircle(pygame, x, y, radius):
     circle_color = (255, 0, 0)  # Red
@@ -238,6 +274,7 @@ class Camera(Group):
             return Coordinate()
 
         list = scene.list()
+        drawTexture = []
         for obj in list:
             if isinstance(obj, Triangle):
                 if obj.transformedPosition.z < 0:
@@ -252,12 +289,48 @@ class Camera(Group):
                         next = (i+1)%len(vertices)
                         if vertices[i].z > 0 or vertices[next].z > 0:
                             pygame.draw.line(screen, (0,255,0), (vertices[i].x, vertices[i].y), (vertices[next].x, vertices[next].y), 2)
+
+                    if len(vertices)==3 and obj.parent is not None and obj.parent.texture is not None:
+                        if obj.parent not in drawTexture:
+                            drawTexture.append(obj.parent)
+
+                        minX = 999999
+                        maxX = -1
+                        minY = 999999
+                        maxY = -1
+
+                        for vertex in vertices:
+                            if minX > vertex.x:
+                                minX = vertex.x
+                            if maxX < vertex.x:
+                                maxX = vertex.x
+                            if minY > vertex.y:
+                                minY = vertex.y
+                            if maxY < vertex.y:
+                                maxY= vertex.y
+
+                        obj.drawRange = [[minX, maxX-minX], [minY, maxY-minY]]
+                        obj.textureArea = pixels_in_triangle(vertices[0].val, vertices[1].val, vertices[2].val)
             else:
                 if obj.transformedPosition.z < 0:
                     pos = posToScreen(obj.transformedPosition)
                     if pos.x > 0 and pos.x < width:
                         if pos.y > 0 and pos.y < height:
                             drawCircle(pygame, pos.x, pos.y, pos.z)
+
+        for mesh in drawTexture:
+            for child in mesh.children:
+                if child.drawRange[0][1] == 0 or child.drawRange[1][1] == 0:
+                    continue
+
+                for pixel in child.textureArea:
+                    x = (pixel[0] - child.drawRange[0][0]) / child.drawRange[0][1]
+                    y = (pixel[1] - child.drawRange[1][0]) / child.drawRange[1][1]
+
+                    x = int(x*(mesh.texture.width-1))
+                    y = int(y*(mesh.texture.height-1))
+
+                    screen.set_at(pixel, mesh.texture.getpixel((x, y)))
 
 class Scene(Group):
     def __init__(self):
@@ -274,13 +347,18 @@ triangle.vertices[1] = Coordinate([-1,0,0])
 triangle.vertices[2] = Coordinate([1,0,0])
 
 triangle2 = Triangle()
-triangle2.vertices[0] = Coordinate([0,1,-1])
-triangle2.vertices[1] = Coordinate([-1,0,-1])
-triangle2.vertices[2] = Coordinate([1,0,-1])
+triangle2.vertices[0] = Coordinate([0,1,0])
+triangle2.vertices[1] = Coordinate([-1,0,0])
+triangle2.vertices[2] = Coordinate([1,0,0])
+
+mesh = Mesh()
+mesh.add(triangle2)
+mesh.position.z = -1
+mesh.texture = Image.open('rainbow.jpeg')
 
 scene.add(point)
 scene.add(triangle)
-scene.add(triangle2)
+scene.add(mesh)
 
 camera = Camera()
 camera.position.z = -10
