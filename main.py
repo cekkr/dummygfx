@@ -44,7 +44,7 @@ def point_on_unit_circle(degrees, moveBy=1.0):
 
 
 def sign(p1, p2, p3):
-    return (p1[0] - p3[0]) * (p2[1] - p3[1]) - (p2[0] - p3[0]) * (p1[1] - p3[1])
+    return ((p1[0] - p3[0]) * (p2[1] - p3[1])) - ((p2[0] - p3[0]) * (p1[1] - p3[1]))
 
 
 def point_in_triangle(pt, v1, v2, v3):
@@ -57,6 +57,10 @@ def point_in_triangle(pt, v1, v2, v3):
 
 
 def pixels_in_triangle(v1, v2, v3):
+    v1 = [int(v1[0]), int(v1[1])]
+    v2 = [int(v2[0]), int(v2[1])]
+    v3 = [int(v3[0]), int(v3[1])]
+
     # Determine the bounding box of the triangle
     min_x = min(v1[0], v2[0], v3[0])
     max_x = max(v1[0], v2[0], v3[0])
