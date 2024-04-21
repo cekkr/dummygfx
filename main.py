@@ -86,6 +86,9 @@ class Coordinate:
     def __mul__(self, other):
         return Coordinate([self.x * other, self.y * other, self.z * other])
 
+    def __truediv__(self, other):
+        return Coordinate([self.x / other, self.y / other, self.z / other])
+
 class Point3D:
     def __init__(self):
         self.position = Coordinate()
@@ -98,6 +101,29 @@ class Camera(Point3D):
         super().__init__()
         self.fov = 1
 
+def calcRotation(rel, rotation):
+    rel *= 1
+
+    radius = calculate_distance(rel.x, rel.y)
+    angle = calculate_angle(rel.x, rel.y)
+    intersection = find_intersections(radius, rotation.x + angle)
+    rel.x = intersection[0]
+    rel.y = intersection[1]
+
+    radius = calculate_distance(rel.y, rel.z)
+    angle = calculate_angle(rel.y, rel.z)
+    intersection = find_intersections(radius, rotation.y + angle)
+    rel.y = intersection[0]
+    rel.z = intersection[1]
+
+    radius = calculate_distance(rel.x, rel.z)
+    angle = calculate_angle(rel.x, rel.z)
+    intersection = find_intersections(radius, rotation.z + angle)
+    rel.x = intersection[0]
+    rel.z = intersection[1]
+
+    return rel
+
 class Group(Point3D):
     def __init__(self):
         super().__init__()
@@ -107,56 +133,41 @@ class Group(Point3D):
         self.children.append(obj)
 
     def transform(self, position=None, rotation=None):
+
+        if position is None:
+            position = self.position * 1
+        else:
+            position = position + self.position
+
+        position = calcRotation(position, rotation)
+        position = calcRotation(position, self.rotation)
+
         for c in range(0, len(self.children)):
             child = self.children[c]
 
-            if isinstance(child, Group):
-                child.transform()
-
             cPos = child
             if isinstance(child, Coordinate):
-                child = child if child.transformed is None else child.transformed
+                cPos = child # if child.transformed is None else child.transformed
             else:
-                cPos = (child.transformedPosition if child.transformedPosition is not None else child.position)
+                cPos = child.position # if child.transformedPosition is None else child.transformedPosition
 
-            rel = cPos - self.position
+            rel = cPos * 1 #+ position
 
-            radius = calculate_distance(rel.x, rel.y)
-            angle = calculate_angle(rel.x, rel.y)
-            intersection = find_intersections(radius, self.rotation.x+angle)
-            rel.x = intersection[0]
-            rel.y = intersection[1]
-
-            radius = calculate_distance(rel.y, rel.z)
-            angle = calculate_angle(rel.y, rel.z)
-            intersection = find_intersections(radius, self.rotation.y + angle)
-            rel.y = intersection[0]
-            rel.z = intersection[1]
-
-            radius = calculate_distance(rel.x, rel.z)
-            angle = calculate_angle(rel.x, rel.z)
-            intersection = find_intersections(radius, self.rotation.z + angle)
-            rel.x = intersection[0]
-            rel.z = intersection[1]
-
-            rel += self.position
-            if position is not None:
-                rel += position
+            rel = calcRotation(rel, rotation)
+            rel = calcRotation(rel, self.rotation)
+            rel += position
+            if isinstance(child, Group):
+                rel = child.transform(rel, rotation)
 
             if isinstance(child, Coordinate):
                 child.transformed = rel
             else:
                 child.transformedPosition = rel
 
-            if isinstance(child, Group):
-                child.transform(rel)
+            #if isinstance(child, Group):
+            #    child.transform(rel, rotation)
 
-            '''
-            if isinstance(child, Coordinate):
-                child.transformed += self.position
-            else:
-                child.transformedPosition += self.position
-            '''
+        return position
 
     def reset(self):
         for child in self.children:
@@ -200,7 +211,7 @@ class Camera(Group):
 
     def render(self, scene, pygame, screen):
         scene.reset()
-        scene.transform(self.position, self.rotation)
+        scene.transform(self.position*-1, self.rotation)
 
         width = screen.get_width()
         height = screen.get_height()
@@ -238,7 +249,8 @@ class Camera(Group):
 
                 for i in range(0, len(vertices)):
                     next = (i+1)%len(vertices)
-                    pygame.draw.line(screen, (0,255,0), (vertices[i].x, vertices[i].y), (vertices[next].x, vertices[next].y), 2)
+                    if vertices[i].z > 0 or vertices[next].z > 0:
+                        pygame.draw.line(screen, (0,255,0), (vertices[i].x, vertices[i].y), (vertices[next].x, vertices[next].y), 2)
             else:
                 pos = posToScreen(obj.transformedPosition)
                 if pos.z > 0:
@@ -250,6 +262,8 @@ class Scene(Group):
     def __init__(self):
         super().__init__()
 
+scene = Scene()
+
 point = Point3D()
 point.position = Coordinate([0,1,1])
 
@@ -258,12 +272,17 @@ triangle.vertices[0] = Coordinate([0,1,0])
 triangle.vertices[1] = Coordinate([-1,0,0])
 triangle.vertices[2] = Coordinate([1,0,0])
 
-scene = Scene()
+triangle2 = Triangle()
+triangle2.vertices[0] = Coordinate([0,1,-1])
+triangle2.vertices[1] = Coordinate([-1,0,-1])
+triangle2.vertices[2] = Coordinate([1,0,-1])
+
 scene.add(point)
 scene.add(triangle)
+scene.add(triangle2)
 
 camera = Camera()
-camera.position.z = -10
+camera.position.z = 10
 
 # Initialize Pygame
 pygame.init()
@@ -291,7 +310,7 @@ while running:
             keyPressing = None
 
     if keyPressing is not None:
-        moveBy = 0.1
+        moveBy = 0.01
         if keyPressing == pygame.K_UP:
             move = point_on_unit_circle(camera.rotation.z, moveBy)
             camera.position.z += move[0]
@@ -301,9 +320,9 @@ while running:
             camera.position.z -= move[0]
             camera.position.x -= move[1]
         elif keyPressing == pygame.K_LEFT:
-            triangle.rotation.z -= moveBy
+            camera.rotation.z -= moveBy * 10
         elif keyPressing == pygame.K_RIGHT:
-            triangle.rotation.z += moveBy
+            camera.rotation.z += moveBy * 10
 
     screen.fill((0,0,0))
     camera.render(scene, pygame, screen)
