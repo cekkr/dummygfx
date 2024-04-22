@@ -1,9 +1,11 @@
+import numpy
 import pygame
 import random
 import math
 from PIL import Image
 import concurrent.futures
 import numpy as np
+import time
 
 def find_intersections(radius, angle_degrees):
     # Convert angle from degrees to radians
@@ -103,7 +105,7 @@ def x_from_y(m, b, y):
     x = (y - b) / m
     return x
 
-def list_pixels_in_triangle(v1, v2, v3):
+def list_pixels_in_triangle(v1, v2, v3, size):
     v1 = [int(v1[0]), int(v1[1])]
     v2 = [int(v2[0]), int(v2[1])]
     v3 = [int(v3[0]), int(v3[1])]
@@ -150,14 +152,8 @@ def list_pixels_in_triangle(v1, v2, v3):
         xx.sort()
 
         for x in range(int(xx[0]), int(xx[1])):
-          pixels.append((x,y))
-
-    '''
-    for x in range(min_x, max_x + 1):
-        for y in range(min_y, max_y + 1):
-            if point_in_triangle((x, y), v1, v2, v3):
-                pixels.append((x, y))
-    '''
+            if 0 <= x < size[0] and 0 <= y <= size[1]:
+                pixels.append((x,y))
 
     return pixels
 
@@ -405,11 +401,16 @@ class Camera(Group):
             if isinstance(obj, Triangle):
                 if obj.transformedPosition.z < 0:
                     vertices = []
+                    somethingInside = False
                     for vertex in obj.vertices:
                         pos = posToScreen(vertex.transformed)
+                        vertices.append(pos)
                         if pos.x > 0 and pos.x < width:
                             if pos.y > 0 and pos.y < height:
-                                vertices.append(pos)
+                                somethingInside = True
+
+                    if not somethingInside:
+                        continue
 
                     for i in range(0, len(vertices)):
                         next = (i+1)%len(vertices)
@@ -436,7 +437,7 @@ class Camera(Group):
                                 maxY= vertex.y
 
                         obj.drawRange = [[minX, maxX-minX], [minY, maxY-minY]]
-                        obj.textureArea = list_pixels_in_triangle(vertices[0].val, vertices[1].val, vertices[2].val)
+                        obj.textureArea = list_pixels_in_triangle(vertices[0].val, vertices[1].val, vertices[2].val, [width, height])
             else:
                 if obj.transformedPosition.z < 0:
                     pos = posToScreen(obj.transformedPosition)
@@ -509,6 +510,8 @@ running = True
 
 # Main loop
 keyPressing = None
+fps = []
+avgFps = 0
 while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -520,7 +523,7 @@ while running:
             keyPressing = None
 
     if keyPressing is not None:
-        moveBy = 0.1
+        moveBy = 0.1 * (120/avgFps)
         if keyPressing == pygame.K_UP:
             move = point_on_unit_circle(camera.rotation.z, moveBy)
             camera.position.z += move[0]
@@ -530,13 +533,24 @@ while running:
             camera.position.z -= move[0]
             camera.position.x -= move[1]
         elif keyPressing == pygame.K_LEFT:
-            camera.rotation.z -= moveBy * 10
+            camera.rotation.z -= moveBy * 2
         elif keyPressing == pygame.K_RIGHT:
-            camera.rotation.z += moveBy * 10
+            camera.rotation.z += moveBy * 2
 
     screen.fill((0,0,0))
     camera.render(scene, pygame, screen)
+
+    font = pygame.font.SysFont('Arial', 12)
+    text_surface = font.render(str(avgFps), False, (255, 255, 255))
+    screen.blit(text_surface, (5, 5))
+
     pygame.display.flip()  # Update the full display Surface to the screen
+
+    curTime = time.time()
+    fps.append(curTime)
+    while len(fps) > 0 and fps[0] < curTime-0.25:
+        del fps[0]
+    avgFps = len(fps)*4
 
 # Quit Pygame
 pygame.quit()
