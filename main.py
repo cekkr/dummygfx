@@ -6,6 +6,9 @@ from PIL import Image
 import concurrent.futures
 import numpy as np
 import time
+from OpenGL.GL import *
+from OpenGL.GLU import *
+from pygame.locals import *
 
 def find_intersections(radius, angle_degrees):
     # Convert angle from degrees to radians
@@ -342,28 +345,79 @@ def drawCircle(pygame, x, y, radius):
     # Draw the circle
     pygame.draw.circle(screen, circle_color, (x,y), radius)
 
-'''
 def apply_texture(child, mesh, screen, screen_array):
     texture_array = mesh.texture_array
 
     width = mesh.image.width
     height = mesh.image.height
 
-    for pixel in child.textureArea:
-        x = (pixel[0] - child.drawRange[0][0]) / child.drawRange[0][1]
-        y = (pixel[1] - child.drawRange[1][0]) / child.drawRange[1][1]
+    screenWidth = screen.get_width()
+    screenHeight = screen.get_height()
 
-        x = int(x * width)
-        y = int(y * height)
+    vv = [[child.screenVertices[0].val[0],child.screenVertices[0].val[1]],[child.screenVertices[1].val[0],child.screenVertices[1].val[1]],[child.screenVertices[2].val[0],child.screenVertices[2].val[1]]]
 
-        # Directly set pixels in the screen's array
-        if 0 <= x < width and 0 <= y < height:
-            screen_array[pixel[0], pixel[1]] = texture_array[x, y]
+    # Determine the bounding box of the triangle
+    min_x = min(vv[0][0], vv[1][0], vv[2][0])
+    max_x = max(vv[0][0], vv[1][0], vv[2][0])
+    min_y = min(vv[0][1], vv[1][1], vv[2][1])
+    max_y = max(vv[0][1], vv[1][1], vv[2][1])
+
+    m1, b1 = find_line_equation(vv[0], vv[1])
+    m2, b2 = find_line_equation(vv[1], vv[2])
+    m3, b3 = find_line_equation(vv[2], vv[0])
+
+    range1 = [vv[0][1], vv[1][1]]
+    range2 = [vv[1][1], vv[2][1]]
+    range3 = [vv[2][1], vv[0][1]]
+
+    range1.sort()
+    range2.sort()
+    range3.sort()
+
+    def y_in_range(range, y):
+        return y >= range[0] and y <= range[1]
+
+    pixels = []
+    for y in range(min_y, max_y + 1):
+        xx = []
+        if y_in_range(range1, y):
+            xx.append(x_from_y(m1, b1, y))
+        if y_in_range(range2, y):
+            xx.append(x_from_y(m2, b2, y))
+        if y_in_range(range3, y):
+            xx.append(x_from_y(m3, b3, y))
+
+        x = 0
+        while x < len(xx):
+            if xx[x] == float('inf'):
+                del xx[x]
+                x -= 1
+            x += 1
+
+        xx.sort()
+
+        yy = (y - child.drawRange[1][0]) / child.drawRange[1][1]
+        yy = int(yy*(height-1))
+
+        diff = xx[1] - xx[0]
+        if diff > 0:
+            x1 = ((xx[0] - child.drawRange[0][0]) / child.drawRange[0][1])*(width-1)
+            x2 = ((xx[1] - child.drawRange[0][0]) / child.drawRange[0][1])*(width-1)
+            xInc = (x2-x1) / diff
+
+            for i in range(0, int(diff)):
+                x = i+int(xx[0])
+
+                if not (0 <= x < screenWidth and 0 <= y < screenHeight):
+                    continue
+
+                screen_array[x, y] = texture_array[int(x1), yy]
+                x1 += xInc
 
     new_surface = pygame.surfarray.make_surface(screen_array)
     screen.blit(new_surface, (0, 0))
-'''
 
+'''
 def apply_texture_chunk(texture_array, width, height, drawRange, screen_array, pixels):
     for pixel in pixels:
         x = (pixel[0] - drawRange[0][0]) / drawRange[0][1]
@@ -400,6 +454,7 @@ def apply_texture(child, mesh, screen, screen_array):
     new_surface = pygame.surfarray.make_surface(screen_array)
     screen.blit(new_surface, (0, 0))
     pygame.display.flip()
+'''
 
 class Camera(Group):
     def __init__(self):
@@ -476,7 +531,8 @@ class Camera(Group):
                                 maxY= vertex.y
 
                         obj.drawRange = [[minX, maxX-minX], [minY, maxY-minY]]
-                        obj.textureArea = list_pixels_in_triangle(vertices[0].val, vertices[1].val, vertices[2].val, [width, height])
+                        obj.screenVertices = vertices
+                        #obj.textureArea = list_pixels_in_triangle(vertices[0].val, vertices[1].val, vertices[2].val, [width, height])
             else:
                 if obj.transformedPosition.z < 0:
                     pos = posToScreen(obj.transformedPosition)
@@ -539,7 +595,7 @@ pygame.init()
 
 # Window size
 width, height = 800, 600
-screen = pygame.display.set_mode((width, height))
+screen = pygame.display.set_mode((width, height), DOUBLEBUF)
 
 # Set the title of the window
 pygame.display.set_caption('Pixel Drawing')
