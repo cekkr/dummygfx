@@ -342,6 +342,7 @@ def drawCircle(pygame, x, y, radius):
     # Draw the circle
     pygame.draw.circle(screen, circle_color, (x,y), radius)
 
+'''
 def apply_texture(child, mesh, screen, screen_array):
     texture_array = mesh.texture_array
 
@@ -361,6 +362,44 @@ def apply_texture(child, mesh, screen, screen_array):
 
     new_surface = pygame.surfarray.make_surface(screen_array)
     screen.blit(new_surface, (0, 0))
+'''
+
+def apply_texture_chunk(texture_array, width, height, drawRange, screen_array, pixels):
+    for pixel in pixels:
+        x = (pixel[0] - drawRange[0][0]) / drawRange[0][1]
+        y = (pixel[1] - drawRange[1][0]) / drawRange[1][1]
+
+        x = int(x * width)
+        y = int(y * height)
+
+        # Directly set pixels in the screen's array
+        if 0 <= x < width and 0 <= y < height:
+            screen_array[pixel[0], pixel[1]] = texture_array[x, y]
+
+def apply_texture(child, mesh, screen, screen_array):
+    texture_array = mesh.texture_array
+    width = mesh.image.width
+    height = mesh.image.height
+    textureArea = child.textureArea
+    num_threads = 2  # You can adjust this number based on your application needs
+
+    # Splitting textureArea into chunks
+    chunk_size = len(textureArea) // num_threads
+    chunks = [textureArea[i * chunk_size:(i + 1) * chunk_size] for i in range(num_threads)]
+    chunks.append(textureArea[(num_threads - 1) * chunk_size:])  # Adding any leftover pixels
+
+    # Use ThreadPoolExecutor to process each chunk in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+        # Map the apply_texture_chunk to each chunk
+        futures = [executor.submit(apply_texture_chunk, texture_array, width, height, child.drawRange, screen_array, chunk) for chunk in chunks]
+
+        # Optionally, ensure all futures are done (they will be upon exiting the context manager)
+        concurrent.futures.wait(futures)
+
+    # Creating a new surface and blitting it
+    new_surface = pygame.surfarray.make_surface(screen_array)
+    screen.blit(new_surface, (0, 0))
+    pygame.display.flip()
 
 class Camera(Group):
     def __init__(self):
