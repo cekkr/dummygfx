@@ -75,6 +75,90 @@ def pixels_in_triangle(v1, v2, v3):
 
     return pixels
 
+
+def find_line_equation(p1, p2):
+    x1, y1 = p1
+    x2, y2 = p2
+
+    # Calculate the slope
+    if x2 - x1 == 0:
+        # Avoid division by zero; handle vertical lines separately if necessary
+        return float('inf'), y1
+
+    m = (y2 - y1) / (x2 - x1)
+    b = y1 - m * x1
+
+    return m, b
+
+
+def x_from_y(m, b, y):
+    if m == 0:
+        return float('inf')
+
+    if m == float('inf'):
+        return b
+
+    x = (y - b) / m
+    return x
+
+def list_pixels_in_triangle(v1, v2, v3):
+    v1 = [int(v1[0]), int(v1[1])]
+    v2 = [int(v2[0]), int(v2[1])]
+    v3 = [int(v3[0]), int(v3[1])]
+
+    # Determine the bounding box of the triangle
+    min_x = min(v1[0], v2[0], v3[0])
+    max_x = max(v1[0], v2[0], v3[0])
+    min_y = min(v1[1], v2[1], v3[1])
+    max_y = max(v1[1], v2[1], v3[1])
+
+    vv = [v1,v2,v3]
+    m1, b1 = find_line_equation(v1, v2)
+    m2, b2 = find_line_equation(v2, v3)
+    m3, b3 = find_line_equation(v3, v1)
+
+    range1 = [v1[1], v2[1]]
+    range2 = [v2[1], v3[1]]
+    range3 = [v3[1], v1[1]]
+
+    range1.sort()
+    range2.sort()
+    range3.sort()
+
+    def y_in_range(range, y):
+        return y >= range[0] and y <= range[1]
+
+    pixels = []
+    for y in range(min_y, max_y + 1):
+        xx = []
+        if y_in_range(range1, y):
+            xx.append(x_from_y(m1, b1, y))
+        if y_in_range(range2, y):
+            xx.append(x_from_y(m2, b2, y))
+        if y_in_range(range3, y):
+            xx.append(x_from_y(m3, b3, y))
+
+        x = 0
+        while x < len(xx):
+            if xx[x] == float('inf'):
+                del xx[x]
+                x -= 1
+            x += 1
+
+        xx.sort()
+
+        for x in range(int(xx[0]), int(xx[1])):
+          pixels.append((x,y))
+
+    '''
+    for x in range(min_x, max_x + 1):
+        for y in range(min_y, max_y + 1):
+            if point_in_triangle((x, y), v1, v2, v3):
+                pixels.append((x, y))
+    '''
+
+    return pixels
+
 ###
 ###
 ###
@@ -314,7 +398,7 @@ class Camera(Group):
                                 maxY= vertex.y
 
                         obj.drawRange = [[minX, maxX-minX], [minY, maxY-minY]]
-                        obj.textureArea = pixels_in_triangle(vertices[0].val, vertices[1].val, vertices[2].val)
+                        obj.textureArea = list_pixels_in_triangle(vertices[0].val, vertices[1].val, vertices[2].val)
             else:
                 if obj.transformedPosition.z < 0:
                     pos = posToScreen(obj.transformedPosition)
@@ -393,7 +477,7 @@ while running:
             keyPressing = None
 
     if keyPressing is not None:
-        moveBy = 0.01
+        moveBy = 0.1
         if keyPressing == pygame.K_UP:
             move = point_on_unit_circle(camera.rotation.z, moveBy)
             camera.position.z += move[0]
