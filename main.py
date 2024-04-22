@@ -338,6 +338,7 @@ class Mesh(Group):
         pygame_surface = pygame.image.fromstring(raw_str, image_size, 'RGBA')
 
         self.texture = pygame_surface
+        self.texture_array = pygame.surfarray.array3d(self.texture)
 
 def drawCircle(pygame, x, y, radius):
     circle_color = (255, 0, 0)  # Red
@@ -345,19 +346,21 @@ def drawCircle(pygame, x, y, radius):
     # Draw the circle
     pygame.draw.circle(screen, circle_color, (x,y), radius)
 
-def apply_texture(child, mesh, screen):
-    screen_array = pygame.surfarray.array3d(screen)
-    texture_array = pygame.surfarray.array3d(mesh.texture)
+def apply_texture(child, mesh, screen, screen_array):
+    texture_array = mesh.texture_array
+
+    width = mesh.image.width
+    height = mesh.image.height
 
     for pixel in child.textureArea:
         x = (pixel[0] - child.drawRange[0][0]) / child.drawRange[0][1]
         y = (pixel[1] - child.drawRange[1][0]) / child.drawRange[1][1]
 
-        x = int(x * (mesh.image.width - 1))
-        y = int(y * (mesh.image.height - 1))
+        x = int(x * width)
+        y = int(y * height)
 
         # Directly set pixels in the screen's array
-        if 0 <= x < mesh.image.width and 0 <= y < mesh.image.height:
+        if 0 <= x < width and 0 <= y < height:
             screen_array[pixel[0], pixel[1]] = texture_array[x, y]
 
     new_surface = pygame.surfarray.make_surface(screen_array)
@@ -441,12 +444,14 @@ class Camera(Group):
                         if pos.y > 0 and pos.y < height:
                             drawCircle(pygame, pos.x, pos.y, pos.z)
 
+        screen_array = pygame.surfarray.array3d(screen)
+
         for mesh in drawTexture:
             for child in mesh.children:
                 if child.drawRange[0][1] == 0 or child.drawRange[1][1] == 0:
                     continue
 
-                apply_texture(child, mesh, screen)
+                apply_texture(child, mesh, screen, screen_array)
 
                 continue
                 for pixel in child.textureArea:
