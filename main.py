@@ -2,6 +2,8 @@ import pygame
 import random
 import math
 from PIL import Image
+import concurrent.futures
+import numpy as np
 
 def find_intersections(radius, angle_degrees):
     # Convert angle from degrees to radians
@@ -322,11 +324,44 @@ class Mesh(Group):
         super().__init__()
         self.texture = None
 
+    def setTexture(self, image):
+        if image.mode != 'RGBA':
+            image = image.convert('RGBA')  # Convert to RGBA if not already in this mode
+
+        self.image = image
+
+        # Convert the PIL image to a string buffer and then to a Pygame surface
+        raw_str = image.tobytes("raw", 'RGBA')
+        image_size = image.size
+
+        # Create a Pygame Surface
+        pygame_surface = pygame.image.fromstring(raw_str, image_size, 'RGBA')
+
+        self.texture = pygame_surface
+
 def drawCircle(pygame, x, y, radius):
     circle_color = (255, 0, 0)  # Red
 
     # Draw the circle
     pygame.draw.circle(screen, circle_color, (x,y), radius)
+
+def apply_texture(child, mesh, screen):
+    screen_array = pygame.surfarray.array3d(screen)
+    texture_array = pygame.surfarray.array3d(mesh.texture)
+
+    for pixel in child.textureArea:
+        x = (pixel[0] - child.drawRange[0][0]) / child.drawRange[0][1]
+        y = (pixel[1] - child.drawRange[1][0]) / child.drawRange[1][1]
+
+        x = int(x * (mesh.image.width - 1))
+        y = int(y * (mesh.image.height - 1))
+
+        # Directly set pixels in the screen's array
+        if 0 <= x < mesh.image.width and 0 <= y < mesh.image.height:
+            screen_array[pixel[0], pixel[1]] = texture_array[x, y]
+
+    new_surface = pygame.surfarray.make_surface(screen_array)
+    screen.blit(new_surface, (0, 0))
 
 class Camera(Group):
     def __init__(self):
@@ -411,6 +446,9 @@ class Camera(Group):
                 if child.drawRange[0][1] == 0 or child.drawRange[1][1] == 0:
                     continue
 
+                apply_texture(child, mesh, screen)
+
+                continue
                 for pixel in child.textureArea:
                     x = (pixel[0] - child.drawRange[0][0]) / child.drawRange[0][1]
                     y = (pixel[1] - child.drawRange[1][0]) / child.drawRange[1][1]
@@ -442,7 +480,7 @@ triangle2.vertices[2] = Coordinate([1,0,0])
 mesh = Mesh()
 mesh.add(triangle2)
 mesh.position.z = -1
-mesh.texture = Image.open('rainbow.jpeg')
+mesh.setTexture(Image.open('rainbow.jpeg'))
 
 scene.add(point)
 scene.add(triangle)
