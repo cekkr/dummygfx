@@ -2,3 +2,4 @@ pygame
 pillow
 numpy
 PyOpenGL
+pyopencl
