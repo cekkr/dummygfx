@@ -339,6 +339,24 @@ class Mesh(Group):
         self.texture = pygame_surface
         self.texture_array = pygame.surfarray.array3d(self.texture)
 
+    def loadModelTxt(self, path):
+        with open(path, "r") as file:
+            # Read the entire contents of the file into a string
+            content = file.read()
+
+        triangles = content.split('\n')
+        for t in triangles:
+            if t == '':
+                break
+
+            triangle = Triangle()
+            vertices = t.split(' ')
+            for v in range(0, 3):
+                vertex = vertices[v].split(',')
+                triangle.vertices[v] = Coordinate([float(vertex[0]), float(vertex[1]), float(vertex[2])])
+
+            self.add(triangle)
+
 def drawCircle(pygame, x, y, radius):
     circle_color = (255, 0, 0)  # Red
 
@@ -568,23 +586,28 @@ scene = Scene()
 point = Point3D()
 point.position = Coordinate([0,1,1])
 
-triangle = Triangle()
-triangle.vertices[0] = Coordinate([0,1,0])
-triangle.vertices[1] = Coordinate([-1,0,0])
-triangle.vertices[2] = Coordinate([1,0,0])
+if False:
+    triangle = Triangle()
+    triangle.vertices[0] = Coordinate([0,1,0])
+    triangle.vertices[1] = Coordinate([-1,0,0])
+    triangle.vertices[2] = Coordinate([1,0,0])
 
-triangle2 = Triangle()
-triangle2.vertices[0] = Coordinate([0,1,0])
-triangle2.vertices[1] = Coordinate([-1,0,0])
-triangle2.vertices[2] = Coordinate([1,0,0])
+    triangle2 = Triangle()
+    triangle2.vertices[0] = Coordinate([0,1,0])
+    triangle2.vertices[1] = Coordinate([-1,0,0])
+    triangle2.vertices[2] = Coordinate([1,0,0])
+
+    mesh = Mesh()
+    mesh.add(triangle2)
+    mesh.position.z = -1
+    mesh.setTexture(Image.open('rainbow.jpeg'))
+
+    scene.add(point)
+    scene.add(triangle)
+    scene.add(mesh)
 
 mesh = Mesh()
-mesh.add(triangle2)
-mesh.position.z = -1
-mesh.setTexture(Image.open('rainbow.jpeg'))
-
-scene.add(point)
-scene.add(triangle)
+mesh.loadModelTxt('model.txt')
 scene.add(mesh)
 
 camera = Camera()
