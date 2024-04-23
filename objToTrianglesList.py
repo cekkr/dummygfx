@@ -26,6 +26,6 @@ def process_obj_file(input_file, output_file):
 
 
 # Example usage:
-input_path = 'model.obj'
-output_path = 'model.txt'
+input_path = 'complexModel.obj'
+output_path = 'complexModel.txt'
 process_obj_file(input_path, output_path)

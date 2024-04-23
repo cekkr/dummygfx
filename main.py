@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy
 import pygame
 import random
@@ -9,6 +11,94 @@ import time
 from OpenGL.GL import *
 from OpenGL.GLU import *
 from pygame.locals import *
+import pyopencl as cl
+
+# Set up OpenCL context and queue
+platform = cl.get_platforms()[0]
+device = platform.get_devices()[0]
+context = cl.Context([device])
+queue = cl.CommandQueue(context)
+
+kernel_code = """
+__kernel void rotatePoints(__global float *coords, __global float *rotations, __global float *results, const int num_points) {
+    int i = get_global_id(0);
+    if (i >= num_points) return;
+
+    // Each point has x, y, z values, so index should be 3 times the point index
+    int idx = i * 3;
+    float x = coords[idx];
+    float y = coords[idx + 1];
+    float z = coords[idx + 2];
+
+    // Rotations are passed as x, y, z for each point
+    float rotation_x = rotations[idx];
+    float rotation_y = rotations[idx + 1];
+    float rotation_z = rotations[idx + 2];
+
+    float radius, angle, sin_theta, cos_theta, new_x, new_y, new_z;
+
+    // Rotate around X-axis
+    if (rotation_x != 0) {
+        radius = sqrt(y * y + z * z);
+        angle = atan2(z, y) + radians(rotation_x);
+        sin_theta = sin(angle);
+        cos_theta = cos(angle);
+        y = radius * cos_theta;
+        z = radius * sin_theta;
+    }
+
+    // Rotate around Y-axis
+    if (rotation_y != 0) {
+        radius = sqrt(x * x + z * z);
+        angle = atan2(x, z) + radians(rotation_y);
+        sin_theta = sin(angle);
+        cos_theta = cos(angle);
+        x = radius * cos_theta;
+        z = radius * sin_theta;
+    }
+
+    // Rotate around Z-axis
+    if (rotation_z != 0) {
+        radius = sqrt(x * x + y * y);
+        angle = atan2(y, x) + radians(rotation_z);
+        sin_theta = sin(angle);
+        cos_theta = cos(angle);
+        x = radius * cos_theta;
+        y = radius * sin_theta;
+    }
+
+    // Save results
+    results[idx] = x;
+    results[idx + 1] = y;
+    results[idx + 2] = z;
+}
+"""
+program = cl.Program(context, kernel_code).build()
+
+def cl_rotatePoints(reqs):
+    coords = [point[0] for point in reqs]
+    rotations = [point[1] for point in reqs]
+
+    # Create buffers for the data
+    coords = np.array(coords).astype(np.float32)
+    rotations = np.array(rotations).astype(np.float32)
+    results = np.empty_like(coords)
+
+    coords_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=coords)
+    rotations_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=rotations)
+    results_buf = cl.Buffer(context, cl.mem_flags.WRITE_ONLY, coords.nbytes)
+
+    # Run the kernel
+    num_points = len(reqs)
+    program.rotatePoints(queue, (num_points,), None, coords_buf, rotations_buf, results_buf, np.int32(num_points))
+
+    # Read back the results
+    cl.enqueue_copy(queue, results, results_buf)
+
+    resCoords = []
+    for res in results:
+        resCoords.append(Coordinate(res))
+    return resCoords
 
 def find_intersections(radius, angle_degrees):
     # Convert angle from degrees to radians
@@ -223,23 +313,26 @@ class Camera(Point3D):
 def calcRotation(rel, rotation):
     rel = rel*1
 
-    radius = calculate_distance(rel.x, rel.y)
-    angle = calculate_angle(rel.x, rel.y)
-    intersection = find_intersections(radius, rotation.x + angle)
-    rel.x = intersection[0]
-    rel.y = intersection[1]
+    if rotation.x != 0:
+        radius = calculate_distance(rel.x, rel.y)
+        angle = calculate_angle(rel.x, rel.y)
+        intersection = find_intersections(radius, rotation.x + angle)
+        rel.x = intersection[0]
+        rel.y = intersection[1]
 
-    radius = calculate_distance(rel.y, rel.z)
-    angle = calculate_angle(rel.y, rel.z)
-    intersection = find_intersections(radius, rotation.y + angle)
-    rel.y = intersection[0]
-    rel.z = intersection[1]
+    if rotation.y != 0:
+        radius = calculate_distance(rel.y, rel.z)
+        angle = calculate_angle(rel.y, rel.z)
+        intersection = find_intersections(radius, rotation.y + angle)
+        rel.y = intersection[0]
+        rel.z = intersection[1]
 
-    radius = calculate_distance(rel.x, rel.z)
-    angle = calculate_angle(rel.x, rel.z)
-    intersection = find_intersections(radius, rotation.z + angle)
-    rel.x = intersection[0]
-    rel.z = intersection[1]
+    if rotation.z != 0:
+        radius = calculate_distance(rel.x, rel.z)
+        angle = calculate_angle(rel.x, rel.z)
+        intersection = find_intersections(radius, rotation.z + angle)
+        rel.x = intersection[0]
+        rel.z = intersection[1]
 
     return rel
 
@@ -254,39 +347,69 @@ class Group(Point3D):
         obj.parent = self
 
     def transform(self, position=None, rotation=None):
-
         if position is None:
             position = self.position * 1
         else:
             position = position + self.position
 
-        newPos = calcRotation(self.position, self.rotation+rotation)
-        position += calcRotation(newPos, rotation)
+        if False:
+            newPos = cl_rotatePoints([[self.position.val, (self.rotation+rotation).val]])[0]
+            position += cl_rotatePoints([[newPos.val, rotation.val]])[0]
 
-        for c in range(0, len(self.children)):
-            child = self.children[c]
+            reqs = []
+            for child in self.children:
+                cPos = child
+                if isinstance(child, Coordinate):
+                    cPos = child  # if child.transformed is None else child.transformed
+                else:
+                    cPos = child.position  # if child.transformedPosition is None else child.transformedPosition
 
-            cPos = child
-            if isinstance(child, Coordinate):
-                cPos = child # if child.transformed is None else child.transformed
-            else:
-                cPos = child.position # if child.transformedPosition is None else child.transformedPosition
+                rel = cPos * 1
 
-            rel = cPos * 1 #+ position
+                rel += position
+                if isinstance(child, Group):
+                    rel = child.transform(rel, rotation)
 
-            rel += position
-            if isinstance(child, Group):
-                rel = child.transform(rel, rotation)
+                reqs.append([rel.val, (self.rotation + rotation).val])
 
-            #rel -= position
-            rel = calcRotation(rel, self.rotation + rotation)
-            #rel += position
-            #rel = calcRotation(rel, rotation)
+            res = cl_rotatePoints(reqs)
+            for i in range(0, len(res)):
+                child = self.children[i]
 
-            if isinstance(child, Coordinate):
-                child.transformed = rel
-            else:
-                child.transformedPosition = rel
+                rel = res[i]
+
+                if isinstance(child, Coordinate):
+                    child.transformed = rel
+                else:
+                    child.transformedPosition = rel
+
+            return position
+
+        else:
+            newPos = calcRotation(self.position, self.rotation+rotation)
+            position += calcRotation(newPos, rotation)
+
+            for c in range(0, len(self.children)):
+                child = self.children[c]
+
+                cPos = child
+                if isinstance(child, Coordinate):
+                    cPos = child # if child.transformed is None else child.transformed
+                else:
+                    cPos = child.position # if child.transformedPosition is None else child.transformedPosition
+
+                rel = cPos * 1
+
+                rel += position
+                if isinstance(child, Group):
+                    rel = child.transform(rel, rotation)
+
+                rel = calcRotation(rel, self.rotation + rotation)
+
+                if isinstance(child, Coordinate):
+                    child.transformed = rel
+                else:
+                    child.transformedPosition = rel
 
         return position
 
@@ -607,7 +730,7 @@ if False:
     scene.add(mesh)
 
 mesh = Mesh()
-mesh.loadModelTxt('model.txt')
+mesh.loadModelTxt('complexModel.txt')
 scene.add(mesh)
 
 camera = Camera()
@@ -651,9 +774,9 @@ while running:
             camera.position.z -= move[0]
             camera.position.x -= move[1]
         elif keyPressing == pygame.K_LEFT:
-            camera.rotation.z -= moveBy * 2
+            camera.rotation.z -= moveBy * 5
         elif keyPressing == pygame.K_RIGHT:
-            camera.rotation.z += moveBy * 2
+            camera.rotation.z += moveBy * 5
 
     screen.fill((0,0,0))
     camera.render(scene, pygame, screen)
