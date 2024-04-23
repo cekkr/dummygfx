@@ -12,6 +12,9 @@ from OpenGL.GL import *
 from OpenGL.GLU import *
 from pygame.locals import *
 import pyopencl as cl
+import asyncio
+import threading
+from threading import Thread, Lock
 
 # Set up OpenCL context and queue
 platform = cl.get_platforms()[0]
@@ -75,6 +78,7 @@ __kernel void rotatePoints(__global float *coords, __global float *rotations, __
 """
 program = cl.Program(context, kernel_code).build()
 
+'''
 def cl_rotatePoints(reqs):
     coords = [point[0] for point in reqs]
     rotations = [point[1] for point in reqs]
@@ -99,6 +103,126 @@ def cl_rotatePoints(reqs):
     for res in results:
         resCoords.append(Coordinate(res))
     return resCoords
+'''
+
+class Event_ts(asyncio.Event):
+    def set(self):
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(super().set)
+        else:
+            return super().set()
+
+    def clear(self):
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(super().clear)
+        else:
+            return super().clear()
+
+    def wait(self):
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(super().wait)
+        else:
+            return super().wait()
+
+# Initialize OpenCL context and queue
+executor = ThreadPoolExecutor()
+request_buffer = []
+buffer_lock = asyncio.Lock()
+batch_size = 10  # Set minimum number of requests before processing
+batch_processed_event = Event_ts()
+#batch_processed_event.clear()
+
+def synchronous_cl_rotate_points(reqs):
+    # Ensure that the context and queue are properly initialized
+    global context, queue, program
+
+    # Prepare data arrays
+    coords = np.array([point[0] for point in reqs], dtype=np.float32)
+    rotations = np.array([point[1] for point in reqs], dtype=np.float32)
+    results = np.empty_like(coords)  # This will store the output
+
+    # Create OpenCL buffers
+    coords_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=coords)
+    rotations_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=rotations)
+    results_buf = cl.Buffer(context, cl.mem_flags.WRITE_ONLY, size=results.nbytes)
+
+    # Execute the kernel
+    num_points = len(reqs)
+    program.rotatePoints.set_args(coords_buf, rotations_buf, results_buf, np.int32(num_points))
+    #program.rotatePoints(queue, (num_points,), None)
+
+    # Read back the results
+    cl.enqueue_copy(queue, results, results_buf)
+    queue.finish()  # Ensure all queued operations are completed
+
+    # Convert the results into Coordinate objects
+    resCoords = [Coordinate(res) for res in results]
+    return resCoords
+
+async def cl_rotatePoints(new_reqs):
+    #async with buffer_lock:
+    startFrom = len(request_buffer)
+    request_buffer.extend(new_reqs)
+    current_buffer_size = len(request_buffer)
+
+    '''
+    if current_buffer_size >= batch_size:
+        await process_batch()
+    else:
+        #batch_processed_event.clear()
+        pass
+    '''
+
+    await batch_processed_event.wait()  # Wait until the batch is processed
+    res = results[startFrom:current_buffer_size]  # Return processed results for the original request count
+
+    while len(res) != len(new_reqs):
+        time.sleep(0.001)
+        print("loop")
+
+    return res
+
+curBatchCycle = 0
+results = []
+async def process_batch():
+    global results
+    global request_buffer
+    global curBatchCycle
+
+    request = request_buffer
+    request_buffer = []
+
+    loop = asyncio.get_running_loop()
+    results = await loop.run_in_executor(executor, synchronous_cl_rotate_points, request)
+
+    batch_processed_event.set()  # Notify waiting tasks that the batch has been processed
+    batch_processed_event.clear()
+
+    curBatchCycle += 1
+
+async def monitor_cl_rotate_points():
+    last_time_modified = None
+    last_size_checked = 0
+    time_threshold = 0.01  # 10 milliseconds
+    batchCycle = -1
+
+    while True:
+        time.sleep(0.001)  # Sleep for 1 millisecond to prevent high CPU usage
+        current_time = time.time()
+
+        current_size = len(request_buffer)
+        # Check if the buffer has been modified or if it's the first time
+        if current_size != last_size_checked:
+            last_size_checked = current_size
+            last_time_modified = current_time
+        # Check if the time threshold has been reached with no size change
+
+        if ((current_size > 0 and (current_time - last_time_modified) >= time_threshold) or current_size > 200) and batchCycle < curBatchCycle:
+            print("10 ms have passed with no change in buffer size. Processing batch... ", current_size)
+            batchCycle = curBatchCycle
+            await process_batch()
+            last_size_checked = 0  # Reset after processing
+            last_time_modified = current_time
 
 def find_intersections(radius, angle_degrees):
     # Convert angle from degrees to radians
@@ -346,72 +470,72 @@ class Group(Point3D):
         self.children.append(obj)
         obj.parent = self
 
-    def transform(self, position=None, rotation=None):
+    async def transform(self, position=None, rotation=None):
         if position is None:
             position = self.position * 1
         else:
             position = position + self.position
 
-        if False:
-            newPos = cl_rotatePoints([[self.position.val, (self.rotation+rotation).val]])[0]
-            position += cl_rotatePoints([[newPos.val, rotation.val]])[0]
+        newPos = await cl_rotatePoints([[self.position.val, (self.rotation + rotation).val]])
+        newPos = newPos[0]
+        newPos = await cl_rotatePoints([[newPos.val, rotation.val]])
+        position += newPos[0]
 
-            reqs = []
-            for child in self.children:
-                cPos = child
-                if isinstance(child, Coordinate):
-                    cPos = child  # if child.transformed is None else child.transformed
-                else:
-                    cPos = child.position  # if child.transformedPosition is None else child.transformedPosition
+        async def process_child(child):
+            if isinstance(child, Coordinate):
+                cPos = child  # if child.transformed is None else child.transformed
+            else:
+                cPos = child.position  # if child.transformedPosition is None else child.transformedPosition
 
-                rel = cPos * 1
+            rel = cPos * 1
+            rel += position
+            if isinstance(child, Group):
+                rel = await child.transform(rel, rotation)
+            return [rel.val, (self.rotation + rotation).val]
 
-                rel += position
-                if isinstance(child, Group):
-                    rel = child.transform(rel, rotation)
+        # Use ThreadPoolExecutor to process children in parallel
+        tasks = [process_child(child) for child in self.children]
+        reqs = await asyncio.gather(*tasks)
 
-                reqs.append([rel.val, (self.rotation + rotation).val])
+        res = await cl_rotatePoints(reqs)
+        for i, child in enumerate(self.children):
+            rel = res[i]
 
-            res = cl_rotatePoints(reqs)
-            for i in range(0, len(res)):
-                child = self.children[i]
-
-                rel = res[i]
-
-                if isinstance(child, Coordinate):
-                    child.transformed = rel
-                else:
-                    child.transformedPosition = rel
-
-            return position
-
-        else:
-            newPos = calcRotation(self.position, self.rotation+rotation)
-            position += calcRotation(newPos, rotation)
-
-            for c in range(0, len(self.children)):
-                child = self.children[c]
-
-                cPos = child
-                if isinstance(child, Coordinate):
-                    cPos = child # if child.transformed is None else child.transformed
-                else:
-                    cPos = child.position # if child.transformedPosition is None else child.transformedPosition
-
-                rel = cPos * 1
-
-                rel += position
-                if isinstance(child, Group):
-                    rel = child.transform(rel, rotation)
-
-                rel = calcRotation(rel, self.rotation + rotation)
-
-                if isinstance(child, Coordinate):
-                    child.transformed = rel
-                else:
-                    child.transformedPosition = rel
+            if isinstance(child, Coordinate):
+                child.transformed = rel
+            else:
+                child.transformedPosition = rel
 
         return position
+
+        '''
+        newPos = calcRotation(self.position, self.rotation+rotation)
+        position += calcRotation(newPos, rotation)
+
+        for c in range(0, len(self.children)):
+            child = self.children[c]
+
+            cPos = child
+            if isinstance(child, Coordinate):
+                cPos = child # if child.transformed is None else child.transformed
+            else:
+                cPos = child.position # if child.transformedPosition is None else child.transformedPosition
+
+            rel = cPos * 1
+
+            rel += position
+            if isinstance(child, Group):
+                rel = child.transform(rel, rotation)
+
+            rel = calcRotation(rel, self.rotation + rotation)
+
+            if isinstance(child, Coordinate):
+                child.transformed = rel
+            else:
+                child.transformedPosition = rel
+
+        return position
+        '''
 
     def reset(self):
         for child in self.children:
@@ -602,9 +726,9 @@ class Camera(Group):
         super().__init__()
         self.fov = 10
 
-    def render(self, scene, pygame, screen):
+    async def render(self, scene, pygame, screen):
         scene.reset()
-        scene.transform(self.position, self.rotation)
+        await scene.transform(self.position, self.rotation)
 
         width = screen.get_width()
         height = screen.get_height()
@@ -704,94 +828,99 @@ class Scene(Group):
     def __init__(self):
         super().__init__()
 
-scene = Scene()
+async def main():
+    asyncio.create_task(monitor_cl_rotate_points())
 
-point = Point3D()
-point.position = Coordinate([0,1,1])
+    scene = Scene()
 
-if False:
-    triangle = Triangle()
-    triangle.vertices[0] = Coordinate([0,1,0])
-    triangle.vertices[1] = Coordinate([-1,0,0])
-    triangle.vertices[2] = Coordinate([1,0,0])
+    point = Point3D()
+    point.position = Coordinate([0,1,1])
 
-    triangle2 = Triangle()
-    triangle2.vertices[0] = Coordinate([0,1,0])
-    triangle2.vertices[1] = Coordinate([-1,0,0])
-    triangle2.vertices[2] = Coordinate([1,0,0])
+    if False:
+        triangle = Triangle()
+        triangle.vertices[0] = Coordinate([0,1,0])
+        triangle.vertices[1] = Coordinate([-1,0,0])
+        triangle.vertices[2] = Coordinate([1,0,0])
+
+        triangle2 = Triangle()
+        triangle2.vertices[0] = Coordinate([0,1,0])
+        triangle2.vertices[1] = Coordinate([-1,0,0])
+        triangle2.vertices[2] = Coordinate([1,0,0])
+
+        mesh = Mesh()
+        mesh.add(triangle2)
+        mesh.position.z = -1
+        mesh.setTexture(Image.open('rainbow.jpeg'))
+
+        scene.add(point)
+        scene.add(triangle)
+        scene.add(mesh)
 
     mesh = Mesh()
-    mesh.add(triangle2)
-    mesh.position.z = -1
-    mesh.setTexture(Image.open('rainbow.jpeg'))
-
-    scene.add(point)
-    scene.add(triangle)
+    mesh.loadModelTxt('complexModel.txt')
     scene.add(mesh)
 
-mesh = Mesh()
-mesh.loadModelTxt('complexModel.txt')
-scene.add(mesh)
+    camera = Camera()
+    camera.position.z = -10
 
-camera = Camera()
-camera.position.z = -10
+    # Initialize Pygame
+    pygame.init()
 
-# Initialize Pygame
-pygame.init()
+    # Window size
+    width, height = 800, 600
+    screen = pygame.display.set_mode((width, height), DOUBLEBUF)
 
-# Window size
-width, height = 800, 600
-screen = pygame.display.set_mode((width, height), DOUBLEBUF)
+    # Set the title of the window
+    pygame.display.set_caption('Pixel Drawing')
 
-# Set the title of the window
-pygame.display.set_caption('Pixel Drawing')
+    # Main loop flag
+    running = True
 
-# Main loop flag
-running = True
+    # Main loop
+    keyPressing = None
+    fps = []
+    avgFps = 0
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
 
-# Main loop
-keyPressing = None
-fps = []
-avgFps = 0
-while running:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
+            if event.type == pygame.KEYDOWN:  # Check for key presses
+                keyPressing = event.key
+            if event.type == pygame.KEYUP:  # Check for key presses
+                keyPressing = None
 
-        if event.type == pygame.KEYDOWN:  # Check for key presses
-            keyPressing = event.key
-        if event.type == pygame.KEYUP:  # Check for key presses
-            keyPressing = None
+        if keyPressing is not None:
+            moveBy = 0.1 * (120/avgFps)
+            if keyPressing == pygame.K_UP:
+                move = point_on_unit_circle(camera.rotation.z, moveBy)
+                camera.position.z += move[0]
+                camera.position.x += move[1]
+            elif keyPressing == pygame.K_DOWN:
+                move = point_on_unit_circle(camera.rotation.z, moveBy)
+                camera.position.z -= move[0]
+                camera.position.x -= move[1]
+            elif keyPressing == pygame.K_LEFT:
+                camera.rotation.z -= moveBy * 5
+            elif keyPressing == pygame.K_RIGHT:
+                camera.rotation.z += moveBy * 5
 
-    if keyPressing is not None:
-        moveBy = 0.1 * (120/avgFps)
-        if keyPressing == pygame.K_UP:
-            move = point_on_unit_circle(camera.rotation.z, moveBy)
-            camera.position.z += move[0]
-            camera.position.x += move[1]
-        elif keyPressing == pygame.K_DOWN:
-            move = point_on_unit_circle(camera.rotation.z, moveBy)
-            camera.position.z -= move[0]
-            camera.position.x -= move[1]
-        elif keyPressing == pygame.K_LEFT:
-            camera.rotation.z -= moveBy * 5
-        elif keyPressing == pygame.K_RIGHT:
-            camera.rotation.z += moveBy * 5
+        screen.fill((0,0,0))
+        await camera.render(scene, pygame, screen)
 
-    screen.fill((0,0,0))
-    camera.render(scene, pygame, screen)
+        font = pygame.font.SysFont('Arial', 12)
+        text_surface = font.render(str(avgFps), False, (255, 255, 255))
+        screen.blit(text_surface, (5, 5))
 
-    font = pygame.font.SysFont('Arial', 12)
-    text_surface = font.render(str(avgFps), False, (255, 255, 255))
-    screen.blit(text_surface, (5, 5))
+        pygame.display.flip()  # Update the full display Surface to the screen
 
-    pygame.display.flip()  # Update the full display Surface to the screen
+        curTime = time.time()
+        fps.append(curTime)
+        while len(fps) > 0 and fps[0] < curTime-0.25:
+            del fps[0]
+        avgFps = len(fps)*4
 
-    curTime = time.time()
-    fps.append(curTime)
-    while len(fps) > 0 and fps[0] < curTime-0.25:
-        del fps[0]
-    avgFps = len(fps)*4
+    # Quit Pygame
+    pygame.quit()
 
-# Quit Pygame
-pygame.quit()
+asyncio.run(main())
