@@ -38,7 +38,7 @@ __kernel void rotatePoints(__global float *coords, __global float *rotations, __
     float rotation_y = rotations[idx + 1];
     float rotation_z = rotations[idx + 2];
 
-    float radius, angle, sin_theta, cos_theta, new_x, new_y, new_z;
+    float radius, angle, sin_theta, cos_theta;
 
     // Rotate around X-axis
     if (rotation_x != 0) {
@@ -119,8 +119,9 @@ class Event_ts(asyncio.Event):
             return super().clear()
 
     def wait(self):
+        return super().wait()
         if self._loop is not None:
-            self._loop.call_soon_threadsafe(super().wait)
+            return self._loop.call_soon_threadsafe(super().wait)
         else:
             return super().wait()
 
@@ -148,8 +149,9 @@ def synchronous_cl_rotate_points(reqs):
 
     # Execute the kernel
     num_points = len(reqs)
-    program.rotatePoints.set_args(coords_buf, rotations_buf, results_buf, np.int32(num_points))
+    #program.rotatePoints.set_args(coords_buf, rotations_buf, results_buf, np.int32(num_points))
     #program.rotatePoints(queue, (num_points,), None)
+    program.rotatePoints(queue, (num_points,), None, coords_buf, rotations_buf, results_buf, np.int32(num_points))
 
     # Read back the results
     cl.enqueue_copy(queue, results, results_buf)
@@ -160,6 +162,8 @@ def synchronous_cl_rotate_points(reqs):
     return resCoords
 
 async def cl_rotatePoints(new_reqs):
+    global batch_processed_event
+
     #async with buffer_lock:
     startFrom = len(request_buffer)
     request_buffer.extend(new_reqs)
@@ -172,6 +176,8 @@ async def cl_rotatePoints(new_reqs):
         #batch_processed_event.clear()
         pass
     '''
+
+    #await monitor_cl_rotate_points()
 
     await batch_processed_event.wait()  # Wait until the batch is processed
     res = results[startFrom:current_buffer_size]  # Return processed results for the original request count
@@ -200,29 +206,34 @@ async def process_batch():
 
     curBatchCycle += 1
 
+last_time_modified = None
+last_size_checked = 0
+time_threshold = 0.01  # 10 milliseconds
+batchCycle = -1
+
 async def monitor_cl_rotate_points():
-    last_time_modified = None
-    last_size_checked = 0
-    time_threshold = 0.01  # 10 milliseconds
-    batchCycle = -1
+    global last_time_modified, last_size_checked, time_threshold, batchCycle
 
+    current_time = time.time()
+
+    current_size = len(request_buffer)
+    # Check if the buffer has been modified or if it's the first time
+    if current_size != last_size_checked:
+        last_size_checked = current_size
+        last_time_modified = current_time
+    # Check if the time threshold has been reached with no size change
+
+    if ((current_size > 0 and (current_time - last_time_modified) >= time_threshold) or current_size > 200) and batchCycle < curBatchCycle:
+        print("10 ms have passed with no change in buffer size. Processing batch... ", current_size)
+        batchCycle = curBatchCycle
+        await process_batch()
+        last_size_checked = 0  # Reset after processing
+        last_time_modified = current_time
+
+async def monitor_cl_rotate_points_loop():
     while True:
-        time.sleep(0.001)  # Sleep for 1 millisecond to prevent high CPU usage
-        current_time = time.time()
-
-        current_size = len(request_buffer)
-        # Check if the buffer has been modified or if it's the first time
-        if current_size != last_size_checked:
-            last_size_checked = current_size
-            last_time_modified = current_time
-        # Check if the time threshold has been reached with no size change
-
-        if ((current_size > 0 and (current_time - last_time_modified) >= time_threshold) or current_size > 200) and batchCycle < curBatchCycle:
-            print("10 ms have passed with no change in buffer size. Processing batch... ", current_size)
-            batchCycle = curBatchCycle
-            await process_batch()
-            last_size_checked = 0  # Reset after processing
-            last_time_modified = current_time
+        await asyncio.sleep(0.001)  # Sleep for 1 millisecond to prevent high CPU usage
+        await monitor_cl_rotate_points()
 
 def find_intersections(radius, angle_degrees):
     # Convert angle from degrees to radians
@@ -494,8 +505,8 @@ class Group(Point3D):
             return [rel.val, (self.rotation + rotation).val]
 
         # Use ThreadPoolExecutor to process children in parallel
-        tasks = [process_child(child) for child in self.children]
-        reqs = await asyncio.gather(*tasks)
+        reqs = [await process_child(child) for child in self.children]
+        #reqs = await asyncio.gather(*tasks)
 
         res = await cl_rotatePoints(reqs)
         for i, child in enumerate(self.children):
@@ -604,7 +615,7 @@ class Mesh(Group):
 
             self.add(triangle)
 
-def drawCircle(pygame, x, y, radius):
+def drawCircle(pygame, x, y, radius, screen):
     circle_color = (255, 0, 0)  # Red
 
     # Draw the circle
@@ -803,7 +814,7 @@ class Camera(Group):
                     pos = posToScreen(obj.transformedPosition)
                     if pos.x > 0 and pos.x < width:
                         if pos.y > 0 and pos.y < height:
-                            drawCircle(pygame, pos.x, pos.y, pos.z)
+                            drawCircle(pygame, pos.x, pos.y, pos.z, screen)
 
         screen_array = pygame.surfarray.array3d(screen)
 
@@ -829,7 +840,7 @@ class Scene(Group):
         super().__init__()
 
 async def main():
-    asyncio.create_task(monitor_cl_rotate_points())
+    #asyncio.create_task(monitor_cl_rotate_points())
 
     scene = Scene()
 
@@ -923,4 +934,11 @@ async def main():
     # Quit Pygame
     pygame.quit()
 
-asyncio.run(main())
+async def run():
+    task1 = asyncio.create_task(monitor_cl_rotate_points_loop())
+    task2 = asyncio.create_task(main())
+
+    # You can wait for the specific tasks if necessary, or just run indefinitely
+    await asyncio.gather(task1, task2)
+
+asyncio.run(run())
