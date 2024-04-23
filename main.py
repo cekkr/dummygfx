@@ -505,8 +505,8 @@ class Group(Point3D):
             return [rel.val, (self.rotation + rotation).val]
 
         # Use ThreadPoolExecutor to process children in parallel
-        reqs = [await process_child(child) for child in self.children]
-        #reqs = await asyncio.gather(*tasks)
+        tasks = [process_child(child) for child in self.children]
+        reqs = await asyncio.gather(*tasks)
 
         res = await cl_rotatePoints(reqs)
         for i, child in enumerate(self.children):
