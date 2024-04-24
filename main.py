@@ -15,6 +15,9 @@ import pyopencl as cl
 import asyncio
 import threading
 from threading import Thread, Lock
+from multiprocessing import Pool
+import os
+import functools
 
 # Set up OpenCL context and queue
 platform = cl.get_platforms()[0]
@@ -217,7 +220,7 @@ async def monitor_cl_rotate_points():
         last_time_modified = current_time
     # Check if the time threshold has been reached with no size change
 
-    if (current_size > 0 and (current_time - last_time_modified) >= time_threshold) :# and batchCycle < curBatchCycle:
+    if (current_size > 0 and (current_time - last_time_modified) >= time_threshold):# and batchCycle < curBatchCycle:
         print("10 ms have passed with no change in buffer size. Processing batch... ", current_size)
         batchCycle = curBatchCycle
         await process_batch()
@@ -226,8 +229,8 @@ async def monitor_cl_rotate_points():
 
 async def monitor_cl_rotate_points_loop():
     while True:
-        await asyncio.sleep(time_threshold)  # Sleep for 1 millisecond to prevent high CPU usage
         await monitor_cl_rotate_points()
+        await asyncio.sleep(time_threshold)  # Sleep for 1 millisecond to prevent high CPU usage
 
 def find_intersections(radius, angle_degrees):
     # Convert angle from degrees to radians
@@ -468,6 +471,36 @@ def calcRotation(rel, rotation):
 
     return rel
 
+
+async def transformChild(child, position, rotation, totRotation):
+    if isinstance(child, Coordinate):
+        cPos = child  # if child.transformed is None else child.transformed
+    else:
+        cPos = child.position  # if child.transformed is None else child.transformed
+
+    rel = cPos * 1
+    rel += position
+    if isinstance(child, Group):
+        rel = await child.transform(rel, rotation)
+
+    if rel.isZero() or totRotation.isZero():
+        return rel
+
+    # if child.transformed is not None and totRotation.val == child.lastRotation.val:
+    #    return child.transformed
+
+    rel = await cl_rotatePoints([[rel.val, totRotation.val]])
+    return rel[0]
+
+def run_async_in_executor(func, *args):
+    new_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(new_loop)
+    try:
+        result = new_loop.run_until_complete(func(*args))
+    finally:
+        new_loop.close()
+    return result
+
 class Group(Point3D):
     def __init__(self):
         super().__init__()
@@ -522,18 +555,33 @@ class Group(Point3D):
             return rel[0]
 
         # Use ThreadPoolExecutor to process children in parallel
-        tasks = [process_child(child) for child in self.children]
+        #tasks = [process_child(child) for child in self.children]
+        tasks = [transformChild(child, position, rotation, totRotation) for child in self.children]
         res = await asyncio.gather(*tasks)
+
+        '''
+        loop = asyncio.get_running_loop()
+        executor = ThreadPoolExecutor(max_workers=os.cpu_count())
+        with Pool(processes=os.cpu_count()) as pool:
+            # Running CPU-bound tasks in separate processes
+            tasks = []
+            for child in self.children:
+                args = functools.partial(run_async_in_executor, transformChild, child, position, rotation, totRotation)
+                task = loop.run_in_executor(executor, args)
+                tasks.append(task)
+
+            res = await asyncio.gather(*tasks)
+        '''
         #res = await cl_rotatePoints(reqs)
 
         for i, child in enumerate(self.children):
             rel = res[i]
 
             child.transformed = rel
-            child.lastRotation = totRotation
+            #child.lastRotation = totRotation
 
         self.transformed = position
-        self.lastRotation = totRotation
+        #self.lastRotation = totRotation
 
         return position
 
@@ -894,7 +942,7 @@ async def main():
 
     # Window size
     width, height = 800, 600
-    screen = pygame.display.set_mode((width, height), DOUBLEBUF)
+    screen = pygame.display.set_mode((width, height))
 
     # Set the title of the window
     pygame.display.set_caption('Pixel Drawing')
@@ -950,10 +998,11 @@ async def main():
     pygame.quit()
 
 async def run():
-    task1 = asyncio.create_task(monitor_cl_rotate_points_loop())
-    task2 = asyncio.create_task(main())
+    task1 = asyncio.ensure_future(monitor_cl_rotate_points_loop())
+    task2 = asyncio.ensure_future(main())
 
     # You can wait for the specific tasks if necessary, or just run indefinitely
     await asyncio.gather(task1, task2)
 
-asyncio.run(run())
+if __name__ == '__main__':
+    asyncio.run(run())
