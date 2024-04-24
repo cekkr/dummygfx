@@ -444,6 +444,9 @@ class Coordinate:
     def isZero(self):
         return self.x == 0 and self.y == 0 and self.z == 0
 
+    def distance(self, other):
+        return math.sqrt(((self.x-other.x)**2)+((self.y-other.y)**2)+((self.z-other.z)**2))
+
 class Point3D:
     def __init__(self):
         self.position = Coordinate()
@@ -843,58 +846,36 @@ def apply_texture(child, mesh, screen, screen_array):
     pygame.display.flip()
 '''
 
-def find_line_slope(P1, P2):
+
+def calculate_euler_angles(P1, P2):
+    # Extract coordinates
     x1, y1, z1 = P1.val
     x2, y2, z2 = P2.val
 
-    if z2 == z1:
-        raise ValueError("The z-coordinates are equal; the line is parallel to the xy-plane and does not change in the z-direction.")
+    # Direction vector from P1 to P2
+    dx, dy, dz = x2 - x1, y2 - y1, z2 - z1
 
-    mx = (x2 - x1) / (z2 - z1)
-    my = (y2 - y1) / (z2 - z1)
+    # Magnitude of the direction vector
+    magnitude = np.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
 
-    return math.atan(mx), math.atan(my)
+    # Normalize the direction vector
+    dx, dy, dz = dx / magnitude, dy / magnitude, dz / magnitude
 
-def euler_to_direction(roll, pitch, yaw):
-    # Convert degrees to radians
-    roll = np.radians(roll)
-    pitch = np.radians(pitch)
-    yaw = np.radians(yaw)
+    # Yaw (phi) - angle from the x-axis in the x-y plane
+    yaw = np.arctan2(dy, dx)
 
-    # Rotation matrices for roll, pitch, and yaw
-    # Roll (rotation around x-axis)
-    R_x = np.array([
-        [1, 0, 0],
-        [0, np.cos(roll), -np.sin(roll)],
-        [0, np.sin(roll), np.cos(roll)]
-    ])
+    # Pitch (theta) - angle from the z-axis
+    pitch = np.arccos(dz)  # acos gives the angle between the vector and the z-axis
 
-    # Pitch (rotation around y-axis)
-    R_y = np.array([
-        [np.cos(pitch), 0, np.sin(pitch)],
-        [0, 1, 0],
-        [-np.sin(pitch), 0, np.cos(pitch)]
-    ])
+    # Roll (psi) - not determinable from a single vector without additional constraints, set to zero
+    roll = 0
 
-    # Yaw (rotation around z-axis)
-    R_z = np.array([
-        [np.cos(yaw), -np.sin(yaw), 0],
-        [np.sin(yaw), np.cos(yaw), 0],
-        [0, 0, 1]
-    ])
+    # Convert radians to degrees
+    yaw_deg = np.degrees(yaw)
+    pitch_deg = np.degrees(pitch)
+    roll_deg = np.degrees(roll)
 
-    # Combined rotation matrix. The order depends on the specific Euler angles convention.
-    # Here it's assumed ZYX.
-    R = np.dot(R_z, np.dot(R_y, R_x))
-
-    # Initial direction vector along the z-axis
-    direction_vector = np.dot(R, np.array([0, 0, 1]))
-
-    # Calculate slopes mx and my
-    mx = direction_vector[0] / direction_vector[2] if direction_vector[2] != 0 else float('inf')
-    my = direction_vector[1] / direction_vector[2] if direction_vector[2] != 0 else float('inf')
-
-    return math.atan(mx), math.atan(my)
+    return roll_deg, pitch_deg, yaw_deg
 
 class Camera(Group):
     def __init__(self):
@@ -908,21 +889,24 @@ class Camera(Group):
         avgFov = ((width+height)/2)
         fov = self.fov
 
-        cmx, cmy = euler_to_direction(self.rotation.y, self.rotation.z, self.rotation.x)
-
         list = scene.list()
         for obj in list:
             pos = obj.position
             if isinstance(obj, Group):
                 pos = obj.avgPosition()
-            mx, my = find_line_slope(self.position, pos)
+            versus = Coordinate(calculate_euler_angles(self.position, pos))
 
-            dmx = mx - cmx
-            dmy = my - cmy
+            dmx = ((self.rotation.z%360)-versus.x) % 360
+            dmy = ((self.rotation.y%360)-versus.y) % 360
+
+            if dmx > 180:
+                dmx = 360 - dmx
+            if dmy > 180:
+                dmy = 360 - dmy
 
             obj.section = (0 if dmx < 0 else 1) + (0 if dmy < 0 else 2)
             dist = math.sqrt((dmx**2)+(dmy**2))
-            obj.ignore = dist > 0.5 * fov
+            obj.ignore = dist > 45 * fov
 
             #print("check")
 
