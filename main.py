@@ -8,9 +8,9 @@ from PIL import Image
 import concurrent.futures
 import numpy as np
 import time
-from OpenGL.GL import *
-from OpenGL.GLU import *
-from pygame.locals import *
+#from OpenGL.GL import *
+#from OpenGL.GLU import *
+#from pygame.locals import *
 import pyopencl as cl
 import asyncio
 import threading
@@ -18,7 +18,8 @@ from threading import Thread, Lock
 
 # Set up OpenCL context and queue
 platform = cl.get_platforms()[0]
-device = platform.get_devices()[0]
+devices = platform.get_devices()
+device = devices[-1]
 context = cl.Context([device])
 queue = cl.CommandQueue(context)
 
@@ -73,6 +74,7 @@ __kernel void rotatePoints(__global float *coords, __global float *rotations, __
     results[idx + 2] = z;
 }
 """
+
 program = cl.Program(context, kernel_code).build()
 
 '''
@@ -189,8 +191,9 @@ async def process_batch():
     request = request_buffer
     request_buffer = []
 
-    loop = asyncio.get_running_loop()
-    results = await loop.run_in_executor(executor, synchronous_cl_rotate_points, request)
+    #loop = asyncio.get_running_loop()
+    #results = await loop.run_in_executor(executor, synchronous_cl_rotate_points, request)
+    results = synchronous_cl_rotate_points(request)
 
     batch_processed_event.set()  # Notify waiting tasks that the batch has been processed
     batch_processed_event.clear()
@@ -214,7 +217,7 @@ async def monitor_cl_rotate_points():
         last_time_modified = current_time
     # Check if the time threshold has been reached with no size change
 
-    if ((current_size > 0 and (current_time - last_time_modified) >= time_threshold) or current_size > 200):# and batchCycle < curBatchCycle:
+    if (current_size > 0 and (current_time - last_time_modified) >= time_threshold) :# and batchCycle < curBatchCycle:
         print("10 ms have passed with no change in buffer size. Processing batch... ", current_size)
         batchCycle = curBatchCycle
         await process_batch()
@@ -509,8 +512,11 @@ class Group(Point3D):
             if isinstance(child, Group):
                 rel = await child.transform(rel, rotation)
 
-            if rel.isZero() or totRotation.isZero(): # or (child.transformed is not None and totRotation.val == child.lastRotation.val):
+            if rel.isZero() or totRotation.isZero():
                 return rel
+
+            #if child.transformed is not None and totRotation.val == child.lastRotation.val:
+            #    return child.transformed
 
             rel = await cl_rotatePoints([[rel.val, totRotation.val]])
             return rel[0]
@@ -856,7 +862,7 @@ async def main():
     point = Point3D()
     point.position = Coordinate([0,1,1])
 
-    if True:
+    if False:
         triangle = Triangle()
         triangle.vertices[0] = Coordinate([0,1,0])
         triangle.vertices[1] = Coordinate([-1,0,0])
