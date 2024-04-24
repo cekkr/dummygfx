@@ -594,8 +594,13 @@ class Group(Point3D):
         # Use ThreadPoolExecutor to process children in parallel
         #res = [await process_child(child) for child in self.children]
         #tasks = [process_child(child) for child in self.children]
-        tasks = [transformChild(child, position, rotation, totRotation) for child in self.children]
-        res = await asyncio.gather(*tasks)
+
+        res = []
+        if len(self.children) > 32:
+            tasks = [transformChild(child, position, rotation, totRotation) for child in self.children]
+            res = await asyncio.gather(*tasks)
+        else:
+            res = [await transformChild(child, position, rotation, totRotation) for child in self.children]
 
         if False:
             # Use ProcessPoolExecutor to execute tasks on multiple cores
@@ -896,8 +901,8 @@ class Camera(Group):
                 pos = obj.avgPosition()
             versus = Coordinate(calculate_euler_angles(self.position, pos))
 
-            dmx = ((self.rotation.z%360)-versus.x) % 360
-            dmy = ((self.rotation.y%360)-versus.y) % 360
+            dmx = ((self.rotation.x%360)-versus.x) % 360
+            dmy = ((self.rotation.z%360)-versus.y) % 360
 
             if dmx > 180:
                 dmx = 360 - dmx
@@ -905,8 +910,11 @@ class Camera(Group):
                 dmy = 360 - dmy
 
             obj.section = (0 if dmx < 0 else 1) + (0 if dmy < 0 else 2)
-            dist = math.sqrt((dmx**2)+(dmy**2))
-            obj.ignore = dist > 45 * fov
+            dist = math.sqrt((dmx**2)+(dmy**2)) % 360
+            if dist > 90:
+                dist = 360 - dist
+
+            obj.ignore = dist > 180 * fov
 
             #print("check")
 
