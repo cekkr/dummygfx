@@ -27,26 +27,26 @@ context = cl.Context([device])
 queue = cl.CommandQueue(context)
 
 kernel_code = """
-__kernel void rotatePoints(__global double *coords, __global double *rotations, __global double *results, const int num_points) {
+__kernel void rotatePoints(__global float *coords, __global float *rotations, __global float *results, const int num_points) {
     int i = get_global_id(0);
     if (i >= num_points) return;
 
     // Each point has x, y, z values, so index should be 3 times the point index
     int idx = i * 3;
-    double x = coords[idx];
-    double y = coords[idx + 1];
-    double z = coords[idx + 2];
+    float x = coords[idx];
+    float y = coords[idx + 1];
+    float z = coords[idx + 2];
 
     // Rotations are passed as x, y, z for each point
-    double rotation_x = rotations[idx];
-    double rotation_y = rotations[idx + 1];
-    double rotation_z = rotations[idx + 2];
+    float rotation_x = rotations[idx];
+    float rotation_y = rotations[idx + 1];
+    float rotation_z = rotations[idx + 2];
 
-    double radius, angle, sin_theta, cos_theta;
+    float radius, angle, sin_theta, cos_theta;
 
-    double xx = x * x;
-    double yy = y * y;
-    double zz = z * z;
+    float xx = x * x;
+    float yy = y * y;
+    float zz = z * z;
 
     if (rotation_x != 0) {
         radius = sqrt(xx + yy);
@@ -144,8 +144,8 @@ def synchronous_cl_rotate_points(reqs):
     global context, queue, program
 
     # Prepare data arrays
-    coords = np.array([point[0] for point in reqs], dtype=np.float64)
-    rotations = np.array([point[1] for point in reqs], dtype=np.float64)
+    coords = np.array([point[0] for point in reqs], dtype=np.float32)
+    rotations = np.array([point[1] for point in reqs], dtype=np.float32)
     results = np.empty_like(coords)  # This will store the output
 
     # Create OpenCL buffers
@@ -910,28 +910,28 @@ class Camera(Group):
         fov = self.fov
 
         list = scene.list()
-        for obj in list:
-            pos = obj.position
-            if isinstance(obj, Group):
-                pos = obj.avgPosition()
-            versus = Coordinate(calculate_euler_angles(self.position, pos))
 
-            dmx = ((self.rotation.x%360)-versus.x) % 360
-            dmy = ((self.rotation.z%360)-versus.y) % 360
+        if False: # check for rendering ingnore checking (not complete)
+            for obj in list:
+                pos = obj.position
+                if isinstance(obj, Group):
+                    pos = obj.avgPosition()
+                versus = Coordinate(calculate_euler_angles(self.position, pos))
 
-            if dmx > 180:
-                dmx = 360 - dmx
-            if dmy > 180:
-                dmy = 360 - dmy
+                dmx = ((self.rotation.x%360)-versus.x) % 360
+                dmy = ((self.rotation.z%360)-versus.y) % 360
 
-            obj.section = (0 if dmx < 0 else 1) + (0 if dmy < 0 else 2)
-            dist = math.sqrt((dmx**2)+(dmy**2)) % 360
-            if dist > 90:
-                dist = 360 - dist
+                if dmx > 180:
+                    dmx = 360 - dmx
+                if dmy > 180:
+                    dmy = 360 - dmy
 
-            obj.ignore = dist > 180 * fov
+                obj.section = (0 if dmx < 0 else 1) + (0 if dmy < 0 else 2)
+                dist = math.sqrt((dmx**2)+(dmy**2)) % 360
+                if dist > 90:
+                    dist = 360 - dist
 
-            #print("check")
+                obj.ignore = dist > 180 * fov
 
         #scene.reset()
         await scene.transform(self.position, self.rotation)
