@@ -637,7 +637,7 @@ class Group(Point3D):
             child.lastRotation = totRotation
 
         self.transformed = position
-        #self.lastRotation = totRotation
+        self.lastRotation = totRotation
 
         return position
 
