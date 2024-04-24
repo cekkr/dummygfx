@@ -172,7 +172,7 @@ async def cl_rotatePoints(new_reqs):
     startFrom = len(request_buffer)
     request_buffer.extend(new_reqs)
     current_buffer_size = len(request_buffer)
-    await asyncio.sleep(0)
+    #await asyncio.sleep(0)
 
     '''
     if current_buffer_size >= batch_size:
@@ -184,7 +184,7 @@ async def cl_rotatePoints(new_reqs):
 
     #await monitor_cl_rotate_points()
 
-    await asyncio.sleep(0)
+    #await asyncio.sleep(0)
     await batch_processed_event.wait()  # Wait until the batch is processed
     res = results[startFrom:current_buffer_size]  # Return processed results for the original request count
 
@@ -221,12 +221,12 @@ async def monitor_cl_rotate_points():
 
     current_size = len(request_buffer)
     # Check if the buffer has been modified or if it's the first time
-    if current_size != last_size_checked:
+    if current_size != last_size_checked and last_size_checked == 0:
         last_size_checked = current_size
         last_time_modified = current_time
     # Check if the time threshold has been reached with no size change
 
-    if (current_size > 0 and (current_time - last_time_modified) >= time_threshold):# and batchCycle < curBatchCycle:
+    if (current_size > 0 and (current_time - last_time_modified) >= time_threshold): # and batchCycle < curBatchCycle:
         print("10 ms have passed with no change in buffer size. Processing batch... ", current_size)
         batchCycle = curBatchCycle
         await process_batch()
@@ -597,10 +597,20 @@ class Group(Point3D):
 
         res = []
         if len(self.children) > 32:
-            tasks = [transformChild(child, position, rotation, totRotation) for child in self.children]
-            res = await asyncio.gather(*tasks)
+            tasks = []
+            for child in self.children:
+                tasks.append(transformChild(child, position, rotation, totRotation))
+                if len(tasks) > 256 and False:
+                    r = await asyncio.gather(*tasks)
+                    res.extend(r)
+                    tasks = []
+            r = await asyncio.gather(*tasks)
+            res.extend(r)
         else:
-            res = [await transformChild(child, position, rotation, totRotation) for child in self.children]
+            res = []
+            for child in self.children:
+                r = await transformChild(child, position, rotation, totRotation)
+                res.append(r)
 
         if False:
             # Use ProcessPoolExecutor to execute tasks on multiple cores
