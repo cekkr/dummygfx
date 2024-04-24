@@ -809,7 +809,7 @@ def apply_texture(child, mesh, screen, screen_array):
         yy = (y - child.drawRange[1][0]) / child.drawRange[1][1]
         yy = int(yy*(height-1))
 
-        diff = xx[1] - xx[0]
+        diff = math.ceil(xx[1] - xx[0])
         if diff > 0:
             x1 = ((xx[0] - child.drawRange[0][0]) / child.drawRange[0][1])*(width-1)
             x2 = ((xx[1] - child.drawRange[0][0]) / child.drawRange[0][1])*(width-1)
@@ -821,8 +821,9 @@ def apply_texture(child, mesh, screen, screen_array):
                 if not (0 <= x < screenWidth and 0 <= y < screenHeight):
                     continue
 
-                screen_array[x, y] = texture_array[int(x1), yy]
-                x1 += xInc
+                if 0 <= x1 < texture_array.shape[0]:
+                    screen_array[x, y] = texture_array[int(x1), yy]
+                    x1 += xInc
 
     new_surface = pygame.surfarray.make_surface(screen_array)
     screen.blit(new_surface, (0, 0))
@@ -911,15 +912,15 @@ class Camera(Group):
 
         list = scene.list()
 
-        if False: # check for rendering ingnore checking (not complete)
+        if True: # check for rendering ingnore checking
             for obj in list:
                 pos = obj.position
                 if isinstance(obj, Group):
                     pos = obj.avgPosition()
                 versus = Coordinate(calculate_euler_angles(self.position, pos))
 
-                dmx = ((self.rotation.x%360)-versus.x) % 360
-                dmy = ((self.rotation.z%360)-versus.y) % 360
+                dmx = ((self.rotation.z%360)-versus.x) % 360
+                dmy = ((self.rotation.y%360)-versus.y) % 360
 
                 if dmx > 180:
                     dmx = 360 - dmx
@@ -928,10 +929,11 @@ class Camera(Group):
 
                 obj.section = (0 if dmx < 0 else 1) + (0 if dmy < 0 else 2)
                 dist = math.sqrt((dmx**2)+(dmy**2)) % 360
+                print(dist)
                 if dist > 90:
                     dist = 360 - dist
 
-                obj.ignore = dist > 180 * fov
+                obj.ignore = dist > 90 * fov
 
         #scene.reset()
         await scene.transform(self.position, self.rotation)
@@ -1062,7 +1064,9 @@ async def main():
         scene.add(mesh)
     else:
         mesh = Mesh()
-        mesh.loadModelTxt('model.txt')
+        mesh.loadModelTxt('complexModel.txt')
+        #mesh.loadModelTxt('model.txt')
+        #mesh.setTexture(Image.open('rainbow.jpeg'))
         scene.add(mesh)
 
     camera = Camera()
