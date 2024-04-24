@@ -598,14 +598,19 @@ class Group(Point3D):
         res = []
         if len(self.children) > 32:
             tasks = []
+            waitFor = []
             for child in self.children:
                 tasks.append(transformChild(child, position, rotation, totRotation))
-                if len(tasks) > 256 and False:
-                    r = await asyncio.gather(*tasks)
-                    res.extend(r)
+                if len(tasks) > 8:
+                    r = asyncio.gather(*tasks)
+                    waitFor.append(r)
                     tasks = []
-            r = await asyncio.gather(*tasks)
-            res.extend(r)
+                    #await asyncio.sleep(0)
+            r = asyncio.gather(*tasks)
+            waitFor.append(r)
+            for wait in waitFor:
+                r = await wait
+                res.extend(r)
         else:
             res = []
             for child in self.children:
