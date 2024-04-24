@@ -40,34 +40,31 @@ __kernel void rotatePoints(__global float *coords, __global float *rotations, __
 
     float radius, angle, sin_theta, cos_theta;
 
-    // Rotate around X-axis
     if (rotation_x != 0) {
+        radius = sqrt(x * x + y * y);
+        angle = atan2(y, x) + radians(rotation_x);
+        sin_theta = sin(angle);
+        cos_theta = cos(angle);
+        x = radius * cos_theta;
+        y = radius * sin_theta;
+    }
+    
+    if (rotation_y != 0) {
         radius = sqrt(y * y + z * z);
-        angle = atan2(z, y) + radians(rotation_x);
+        angle = atan2(z, y) + radians(rotation_y);
         sin_theta = sin(angle);
         cos_theta = cos(angle);
         y = radius * cos_theta;
         z = radius * sin_theta;
     }
-
-    // Rotate around Y-axis
-    if (rotation_y != 0) {
-        radius = sqrt(x * x + z * z);
-        angle = atan2(x, z) + radians(rotation_y);
-        sin_theta = sin(angle);
-        cos_theta = cos(angle);
-        x = radius * cos_theta;
-        z = radius * sin_theta;
-    }
-
-    // Rotate around Z-axis
+            
     if (rotation_z != 0) {
-        radius = sqrt(x * x + y * y);
-        angle = atan2(y, x) + radians(rotation_z);
+        radius = sqrt(x * x + z * z);
+        angle = atan2(x, z) + radians(rotation_z*-1);
         sin_theta = sin(angle);
         cos_theta = cos(angle);
-        x = radius * cos_theta;
-        y = radius * sin_theta;
+        z = radius * cos_theta;
+        x = radius * sin_theta;
     }
 
     // Save results
@@ -149,8 +146,6 @@ def synchronous_cl_rotate_points(reqs):
 
     # Execute the kernel
     num_points = len(reqs)
-    #program.rotatePoints.set_args(coords_buf, rotations_buf, results_buf, np.int32(num_points))
-    #program.rotatePoints(queue, (num_points,), None)
     program.rotatePoints(queue, (num_points,), None, coords_buf, rotations_buf, results_buf, np.int32(num_points))
 
     # Read back the results
@@ -182,10 +177,6 @@ async def cl_rotatePoints(new_reqs):
     await batch_processed_event.wait()  # Wait until the batch is processed
     res = results[startFrom:current_buffer_size]  # Return processed results for the original request count
 
-    while len(res) != len(new_reqs):
-        time.sleep(0.001)
-        print("loop")
-
     return res
 
 curBatchCycle = 0
@@ -208,7 +199,7 @@ async def process_batch():
 
 last_time_modified = None
 last_size_checked = 0
-time_threshold = 0.01  # 10 milliseconds
+time_threshold = 0.001  # 10 milliseconds
 batchCycle = -1
 
 async def monitor_cl_rotate_points():
@@ -223,7 +214,7 @@ async def monitor_cl_rotate_points():
         last_time_modified = current_time
     # Check if the time threshold has been reached with no size change
 
-    if ((current_size > 0 and (current_time - last_time_modified) >= time_threshold) or current_size > 200) and batchCycle < curBatchCycle:
+    if ((current_size > 0 and (current_time - last_time_modified) >= time_threshold) or current_size > 200):# and batchCycle < curBatchCycle:
         print("10 ms have passed with no change in buffer size. Processing batch... ", current_size)
         batchCycle = curBatchCycle
         await process_batch()
@@ -232,7 +223,7 @@ async def monitor_cl_rotate_points():
 
 async def monitor_cl_rotate_points_loop():
     while True:
-        await asyncio.sleep(0.001)  # Sleep for 1 millisecond to prevent high CPU usage
+        await asyncio.sleep(time_threshold)  # Sleep for 1 millisecond to prevent high CPU usage
         await monitor_cl_rotate_points()
 
 def find_intersections(radius, angle_degrees):
@@ -432,11 +423,14 @@ class Coordinate:
     def __truediv__(self, other):
         return Coordinate([self.x / other, self.y / other, self.z / other])
 
+    def isZero(self):
+        return self.x == 0 and self.y == 0 and self.z == 0
+
 class Point3D:
     def __init__(self):
         self.position = Coordinate()
         self.rotation = Coordinate()
-        self.transformedPosition = None
+        self.transformed = None
         self.transformedRotation = None
         self.parent = None
 
@@ -487,35 +481,53 @@ class Group(Point3D):
         else:
             position = position + self.position
 
-        newPos = await cl_rotatePoints([[self.position.val, (self.rotation + rotation).val]])
-        newPos = newPos[0]
-        newPos = await cl_rotatePoints([[newPos.val, rotation.val]])
-        position += newPos[0]
+        totRotation = self.rotation + rotation
+
+        #if self.transformed is not None and self.lastRotation.val == totRotation.val:
+        #    return self.transformed
+
+        if not position.isZero():
+            newPos = self.position
+            if not totRotation.isZero() and not newPos.isZero():
+                newPos = await cl_rotatePoints([[newPos.val, totRotation.val]])
+                newPos = newPos[0]
+
+            if not rotation.isZero() and not newPos.isZero():
+                newPos = await cl_rotatePoints([[newPos.val, rotation.val]])
+                newPos = newPos[0]
+
+            position += newPos
 
         async def process_child(child):
             if isinstance(child, Coordinate):
                 cPos = child  # if child.transformed is None else child.transformed
             else:
-                cPos = child.position  # if child.transformedPosition is None else child.transformedPosition
+                cPos = child.position  # if child.transformed is None else child.transformed
 
             rel = cPos * 1
             rel += position
             if isinstance(child, Group):
                 rel = await child.transform(rel, rotation)
-            return [rel.val, (self.rotation + rotation).val]
+
+            if rel.isZero() or totRotation.isZero(): # or (child.transformed is not None and totRotation.val == child.lastRotation.val):
+                return rel
+
+            rel = await cl_rotatePoints([[rel.val, totRotation.val]])
+            return rel[0]
 
         # Use ThreadPoolExecutor to process children in parallel
         tasks = [process_child(child) for child in self.children]
-        reqs = await asyncio.gather(*tasks)
+        res = await asyncio.gather(*tasks)
+        #res = await cl_rotatePoints(reqs)
 
-        res = await cl_rotatePoints(reqs)
         for i, child in enumerate(self.children):
             rel = res[i]
 
-            if isinstance(child, Coordinate):
-                child.transformed = rel
-            else:
-                child.transformedPosition = rel
+            child.transformed = rel
+            child.lastRotation = totRotation
+
+        self.transformed = position
+        self.lastRotation = totRotation
 
         return position
 
@@ -530,7 +542,7 @@ class Group(Point3D):
             if isinstance(child, Coordinate):
                 cPos = child # if child.transformed is None else child.transformed
             else:
-                cPos = child.position # if child.transformedPosition is None else child.transformedPosition
+                cPos = child.position # if child.transformed is None else child.transformed
 
             rel = cPos * 1
 
@@ -543,7 +555,7 @@ class Group(Point3D):
             if isinstance(child, Coordinate):
                 child.transformed = rel
             else:
-                child.transformedPosition = rel
+                child.transformed = rel
 
         return position
         '''
@@ -553,11 +565,8 @@ class Group(Point3D):
             if isinstance(child, Group):
                 child.reset()
 
-            if isinstance(child, Coordinate):
-                child.transformed = None
-            else:
-                child.transformedPosition = None
-                child.transformedRotation = None
+            child.transformed = None
+            #child.transformedRotation = None
 
     def list(self):
         res = []
@@ -738,7 +747,7 @@ class Camera(Group):
         self.fov = 10
 
     async def render(self, scene, pygame, screen):
-        scene.reset()
+        #scene.reset()
         await scene.transform(self.position, self.rotation)
 
         width = screen.get_width()
@@ -769,7 +778,7 @@ class Camera(Group):
         drawTexture = []
         for obj in list:
             if isinstance(obj, Triangle):
-                if obj.transformedPosition.z < 0:
+                if obj.transformed.z < 0:
                     vertices = []
                     somethingInside = False
                     for vertex in obj.vertices:
@@ -810,11 +819,11 @@ class Camera(Group):
                         obj.screenVertices = vertices
                         #obj.textureArea = list_pixels_in_triangle(vertices[0].val, vertices[1].val, vertices[2].val, [width, height])
             else:
-                if obj.transformedPosition.z < 0:
-                    pos = posToScreen(obj.transformedPosition)
+                if obj.transformed.z < 0:
+                    pos = posToScreen(obj.transformed)
                     if pos.x > 0 and pos.x < width:
                         if pos.y > 0 and pos.y < height:
-                            drawCircle(pygame, pos.x, pos.y, pos.z, screen)
+                            drawCircle(pygame, pos.x, pos.y, int(pos.z), screen)
 
         screen_array = pygame.surfarray.array3d(screen)
 
@@ -847,7 +856,7 @@ async def main():
     point = Point3D()
     point.position = Coordinate([0,1,1])
 
-    if False:
+    if True:
         triangle = Triangle()
         triangle.vertices[0] = Coordinate([0,1,0])
         triangle.vertices[1] = Coordinate([-1,0,0])
@@ -866,10 +875,10 @@ async def main():
         scene.add(point)
         scene.add(triangle)
         scene.add(mesh)
-
-    mesh = Mesh()
-    mesh.loadModelTxt('complexModel.txt')
-    scene.add(mesh)
+    else:
+        mesh = Mesh()
+        mesh.loadModelTxt('complexModel.txt')
+        scene.add(mesh)
 
     camera = Camera()
     camera.position.z = -10
