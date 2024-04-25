@@ -520,9 +520,9 @@ def run_async_in_executor(func, *args):
     return result
 
 executor = None
+num_cores = os.cpu_count()
 if __name__ == '__main__':
-    num_cores = os.cpu_count()
-    executor = concurrent.futures.ProcessPoolExecutor(max_workers=4)
+    executor = concurrent.futures.ProcessPoolExecutor(max_workers=num_cores)
 
 class Group(Point3D):
     def __init__(self):
@@ -716,20 +716,24 @@ class Mesh(Group):
         self.texture = None
 
     def setTexture(self, image):
-        if image.mode != 'RGBA':
-            image = image.convert('RGBA')  # Convert to RGBA if not already in this mode
+        if image.mode != 'RGB':
+            image = image.convert('RGB')  # Convert to RGBA if not already in this mode
 
         self.image = image
 
-        # Convert the PIL image to a string buffer and then to a Pygame surface
-        raw_str = image.tobytes("raw", 'RGBA')
-        image_size = image.size
+        if False:
+            # Convert the PIL image to a string buffer and then to a Pygame surface
+            raw_str = image.tobytes("raw", 'RGBA')
+            image_size = image.size
 
-        # Create a Pygame Surface
-        pygame_surface = pygame.image.fromstring(raw_str, image_size, 'RGBA')
+            # Create a Pygame Surface
+            pygame_surface = pygame.image.fromstring(raw_str, image_size, 'RGBA')
 
-        self.texture = pygame_surface
-        self.texture_array = pygame.surfarray.array3d(self.texture)
+            self.texture = pygame_surface
+            self.texture_array = pygame.surfarray.array3d(self.texture)
+        else:
+            self.texture = image
+            self.texture_array = np.array(image)
 
     def loadModelTxt(self, path):
         with open(path, "r") as file:
@@ -755,14 +759,34 @@ def drawCircle(pygame, x, y, radius, screen):
     # Draw the circle
     pygame.draw.circle(screen, circle_color, (x,y), radius)
 
-def apply_texture(child, mesh, screen, screen_array):
+def calculate_z(x, y, vertices):
+    # Unpack vertices
+    (x1, y1, z1), (x2, y2, z2), (x3, y3, z3) = vertices
+
+    # Vectors AB and AC
+    AB = np.array([x2 - x1, y2 - y1, z2 - z1])
+    AC = np.array([x3 - x1, y3 - y1, z3 - z1])
+
+    # Cross product to find the normal vector
+    n = np.cross(AB, AC)
+
+    # Plane equation coefficients
+    a, b, c = n
+    d = - (a * x1 + b * y1 + c * z1)
+
+    if c == 0:
+        return 9999999 # babbè
+
+    # Solve for z
+    z = - (a * x + b * y + d) / c
+    return z
+
+
+async def apply_texture(child, mesh, screen_width, screen_height):
     texture_array = mesh.texture_array
 
     width = mesh.image.width
     height = mesh.image.height
-
-    screenWidth = screen.get_width()
-    screenHeight = screen.get_height()
 
     vv = [[child.screenVertices[0].val[0],child.screenVertices[0].val[1]],[child.screenVertices[1].val[0],child.screenVertices[1].val[1]],[child.screenVertices[2].val[0],child.screenVertices[2].val[1]]]
 
@@ -787,7 +811,10 @@ def apply_texture(child, mesh, screen, screen_array):
     def y_in_range(range, y):
         return y >= range[0] and y <= range[1]
 
-    pixels = []
+    screen_array = np.zeros(shape=(screen_width, screen_height, 3))
+    screen_depth = np.zeros(shape=(screen_width, screen_height))
+    vertices = [child.screenVertices[0].val, child.screenVertices[1].val, child.screenVertices[2].val]
+
     for y in range(min_y, max_y + 1):
         xx = []
         if y_in_range(range1, y):
@@ -805,6 +832,7 @@ def apply_texture(child, mesh, screen, screen_array):
             x += 1
 
         xx.sort()
+        xx0 = int(xx[0])
 
         yy = (y - child.drawRange[1][0]) / child.drawRange[1][1]
         yy = int(yy*(height-1))
@@ -816,17 +844,17 @@ def apply_texture(child, mesh, screen, screen_array):
             xInc = (x2-x1) / diff
 
             for i in range(0, int(diff)):
-                x = i+int(xx[0])
+                x = i+xx0
 
-                if not (0 <= x < screenWidth and 0 <= y < screenHeight):
+                if not (0 <= x < screen_width and 0 <= y < screen_height):
                     continue
 
-                if 0 <= x1 < texture_array.shape[0]:
+                if 0 <= x1 < texture_array.shape[0] and 0 < x < screen_array.shape[0] and 0 < y < screen_array.shape[1]:
                     screen_array[x, y] = texture_array[int(x1), yy]
+                    screen_depth[x, y] = calculate_z(x, y, vertices)
                     x1 += xInc
 
-    new_surface = pygame.surfarray.make_surface(screen_array)
-    screen.blit(new_surface, (0, 0))
+    return screen_array, screen_depth, [[min_x, max_x], [min_y, max_y]]
 
 '''
 def apply_texture_chunk(texture_array, width, height, drawRange, screen_array, pixels):
@@ -921,19 +949,17 @@ class Camera(Group):
 
                 dmx = ((self.rotation.z%360)-versus.x) % 360
                 dmy = ((self.rotation.y%360)-versus.y) % 360
+                dmy = 360 - dmy
 
                 if dmx > 180:
                     dmx = 360 - dmx
                 if dmy > 180:
-                    dmy = 360 - dmy
+                    dmy = 360 - dmx
 
                 obj.section = (0 if dmx < 0 else 1) + (0 if dmy < 0 else 2)
-                dist = math.sqrt((dmx**2)+(dmy**2)) % 360
-                print(dist)
-                if dist > 90:
-                    dist = 360 - dist
+                dist = math.fabs(dmx - dmy)
 
-                obj.ignore = dist > 90 * fov
+                obj.ignore = dist > 45 * fov
 
         #scene.reset()
         await scene.transform(self.position, self.rotation)
@@ -1014,22 +1040,57 @@ class Camera(Group):
 
         screen_array = pygame.surfarray.array3d(screen)
 
+        tasks = []
+        res = []
+
+        loop = asyncio.get_running_loop()
         for mesh in drawTexture:
             for child in mesh.children:
                 if child.drawRange[0][1] == 0 or child.drawRange[1][1] == 0:
                     continue
 
-                apply_texture(child, mesh, screen, screen_array)
+                if True:
+                    #tasks.append(apply_texture(child, mesh, width, height))
 
-                continue
-                for pixel in child.textureArea:
-                    x = (pixel[0] - child.drawRange[0][0]) / child.drawRange[0][1]
-                    y = (pixel[1] - child.drawRange[1][0]) / child.drawRange[1][1]
+                    task = loop.run_in_executor(executor, run_async_in_executor, apply_texture, child, mesh, width, height)
+                    tasks.append(task)
 
-                    x = int(x*(mesh.texture.width-1))
-                    y = int(y*(mesh.texture.height-1))
+                    if len(tasks) >= num_cores*4:
+                        print("starting rendering textures")
+                        r = await asyncio.gather(*tasks)
+                        print("textures rendered")
+                        res.extend(r)
+                        tasks = []
 
-                    screen.set_at(pixel, mesh.texture.getpixel((x, y)))
+                else:
+                    res.append(await apply_texture(child, mesh, width, height))
+
+        if len(tasks) > 0:
+            r = await asyncio.gather(*tasks)
+            res.extend(r)
+
+        depth = np.zeros((width, height))
+        i = 0
+        for r in res:
+            s = r[0]
+            z = r[1]
+            txtRange = r[2]
+
+            for x in range(txtRange[0][0], txtRange[0][1]):
+                for y in range(txtRange[1][0], txtRange[1][1]):
+                    if x >= width or y >= height:
+                        continue
+
+                    zz = z[x,y]
+                    if zz > 0:
+                        d = depth[x, y]
+                        if d == 0 or zz < d:
+                            depth[x,y] = zz
+                            screen_array[x, y] = s[x, y]
+            i += 1
+
+        new_surface = pygame.surfarray.make_surface(screen_array)
+        screen.blit(new_surface, (0, 0))
 
 class Scene(Group):
     def __init__(self):
@@ -1064,7 +1125,7 @@ async def main():
         scene.add(mesh)
     else:
         mesh = Mesh()
-        mesh.loadModelTxt('complexModel.txt')
+        mesh.loadModelTxt('model.txt')
         #mesh.loadModelTxt('model.txt')
         #mesh.setTexture(Image.open('rainbow.jpeg'))
         scene.add(mesh)
