@@ -191,7 +191,14 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     totPos_y += res[1];
     totPos_z += res[2];
     
-    rotatePoints(totPos_x, totPos_y, totPos_z, totRot_x, totRot_y, totRot_z, res);        
+    if(parent >= 0){
+        rotatePoints(totPos_x, totPos_y, totPos_z, totRot_x, totRot_y, totRot_z, res);
+    }   
+    else {
+        res[0] = totPos_x;
+        res[1] = totPos_y;
+        res[2] = totPos_z;
+    }     
 
     idx = i*6;
     results[idx] = res[0];
