@@ -155,48 +155,43 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     float totRot_z = rot_z;
     
     int parent = parents[i];
-    
     if(parent == -1){
-        float mainPos_x = mainCoords[0];
-        float mainPos_y = mainCoords[1];
-        float mainPos_z = mainCoords[2];
+        totPos_x += mainCoords[0];
+        totPos_y += mainCoords[1];
+        totPos_z += mainCoords[2];
         
-        float mainRot_x = mainCoords[3];
-        float mainRot_y = mainCoords[4];
-        float mainRot_z = mainCoords[5];
-        
-        totPos_x += mainPos_x;
-        totPos_y += mainPos_y;
-        totPos_z += mainPos_z;
-        
-        totRot_x += mainRot_x;
-        totRot_y += mainRot_y;
-        totRot_z += mainRot_z;
+        totRot_x += mainCoords[3];
+        totRot_y += mainCoords[4];
+        totRot_z += mainCoords[5];
     }
     else {
-        idx = i*6;
+        idx = parent*6;
+  
+        totPos_x += results[idx];
+        totPos_y += results[idx+1];
+        totPos_z += results[idx+2];
         
-        float mainPos_x = results[idx];
-        float mainPos_y = results[idx+1];
-        float mainPos_z = results[idx+2];
-        
-        float mainRot_x = results[idx+3];
-        float mainRot_y = results[idx+4];
-        float mainRot_z = results[idx+5];
-        
-        totPos_x += mainPos_x;
-        totPos_y += mainPos_y;
-        totPos_z += mainPos_z;
-        
-        totRot_x += mainRot_x;
-        totRot_y += mainRot_y;
-        totRot_z += mainRot_z;
+        totRot_x += results[idx+3];
+        totRot_y += results[idx+4];
+        totRot_z += results[idx+5];
     }
     
     float res[3];
     rotatePoints(pos_x, pos_y, pos_z, totRot_x, totRot_y, totRot_z, res);
     rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);
-    rotatePoints(res[0], res[1], res[2], totRot_x, totRot_x, totRot_x, res);
+    
+    totPos_x += res[0];
+    totPos_y += res[1];
+    totPos_z += res[2];
+    
+    if(parent >= 0){
+        rotatePoints(totPos_x, totPos_y, totPos_z, totRot_x, totRot_x, totRot_x, res);
+    }
+    else {
+        res[0] = totPos_x;
+        res[1] = totPos_y;
+        res[2] = totPos_z;
+    }    
     
     idx = i*6;
     results[idx] = res[0];
@@ -227,10 +222,10 @@ def synchronous_cl_commands(cmds, position, rotation):
         parents.append(cmd[2])
 
     # Prepare data arrays
-    mainCoords = np.array(mainCoords)
-    requests = np.array(requests)
-    parents = np.array(parents)
-    results = np.zeros(shape=(len(cmds), 6))  # This will store the output
+    mainCoords = np.array(mainCoords, dtype=np.float32)
+    requests = np.array(requests, dtype=np.float32)
+    parents = np.array(parents, dtype=np.int32)
+    results = np.zeros(shape=(len(cmds), 6), dtype=np.float32)  # This will store the output
 
     # Create OpenCL buffers
     mainCoords_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=mainCoords)
@@ -569,6 +564,7 @@ class Coordinate:
         self.val = val
         self.transformed = None
         self.ignore = False
+        self.commandPos = -1
 
     @property
     def x(self):
@@ -699,6 +695,7 @@ class Group(Point3D):
         self.children = []
         self.texture = None
         self.ignore = False
+        self.commandPos = -1
 
     def add(self, obj):
         self.children.append(obj)
@@ -722,6 +719,7 @@ class Group(Point3D):
 
         cmd = [self.position, self.rotation, parent]
         pos = len(cmds)
+        self.commandPos = len(cmds)
         cmds.append(cmd)
 
         for child in self.children:
@@ -733,6 +731,7 @@ class Group(Point3D):
             if isinstance(child, Group):
                 child.transformCommands(pos, cmds)
             else:
+                child.commandPos = len(cmds)
                 cmds.append([cPos, Coordinate(), pos])
 
         return cmds
@@ -891,6 +890,16 @@ class Group(Point3D):
                 res += child.list()
             else:
                 res.append(child)
+        return res
+
+    def listVertices(self):
+        res = []
+        for child in self.children:
+            if isinstance(child, Coordinate):
+                res.append(child)
+            else:
+                res += child.listVertices()
+
         return res
 
 class Triangle(Group):
@@ -1131,9 +1140,11 @@ class Camera(Group):
 
         list = scene.list()
 
-        if True: # check for rendering ingnore checking
+        if False: # check for rendering ingnore checking
             for obj in list:
-                pos = obj.position
+                pos = obj
+                if not isinstance(obj, Coordinate):
+                    pos = obj.position
                 if isinstance(obj, Group):
                     pos = obj.avgPosition()
                 versus = Coordinate(calculate_euler_angles(self.position, pos))
@@ -1153,10 +1164,14 @@ class Camera(Group):
                 obj.ignore = dist > 45 * fov
 
         #scene.reset()
-        await scene.transform(self.position, self.rotation)
+        #await scene.transform(self.position, self.rotation)
 
         cmds = scene.transformCommands()
-        synchronous_cl_commands(cmds, self.position, self.rotation)
+        res = synchronous_cl_commands(cmds, self.position, self.rotation)
+
+        for obj in scene.listVertices():
+            if obj.commandPos >= 0:
+                obj.transformed = res[obj.commandPos]
 
         midWidth = width/2
         midHeight = height/2
@@ -1170,8 +1185,15 @@ class Camera(Group):
                 pos.y *= diffZ
                 pos.z *= diffZ
 
-                x = int((pos.x * avgFov) + midWidth)
-                y = int((pos.y * avgFov) + midHeight)
+                x = (pos.x * avgFov) + midWidth
+                y = (pos.y * avgFov) + midHeight
+
+                if math.isinf(x) or math.isinf(y): # useless
+                    return Coordinate()
+
+                x = int(x)
+                y = int(y)
+
                 return Coordinate([x, y, pos.z])
 
             return Coordinate()
@@ -1185,46 +1207,45 @@ class Camera(Group):
                 continue
 
             if isinstance(obj, Triangle):
-                if obj.transformed.z < 0:
-                    vertices = []
-                    somethingInside = False
-                    for vertex in obj.vertices:
-                        pos = posToScreen(vertex.transformed)
-                        vertices.append(pos)
-                        if pos.x > 0 and pos.x < width:
-                            if pos.y > 0 and pos.y < height:
-                                somethingInside = True
+                vertices = []
+                somethingInside = False
+                for vertex in obj.vertices:
+                    pos = posToScreen(vertex.transformed)
+                    vertices.append(pos)
+                    if pos.x > 0 and pos.x < width:
+                        if pos.y > 0 and pos.y < height:
+                            somethingInside = True
 
-                    if not somethingInside:
-                        continue
+                if not somethingInside:
+                    continue
 
-                    for i in range(0, len(vertices)):
-                        next = (i+1)%len(vertices)
-                        if vertices[i].z > 0 or vertices[next].z > 0:
-                            pygame.draw.line(screen, (0,255,0), (vertices[i].x, vertices[i].y), (vertices[next].x, vertices[next].y), 2)
+                for i in range(0, len(vertices)):
+                    next = (i+1)%len(vertices)
+                    if vertices[i].z > 0 or vertices[next].z > 0:
+                        pygame.draw.line(screen, (0,255,0), (vertices[i].x, vertices[i].y), (vertices[next].x, vertices[next].y), 2)
 
-                    if len(vertices)==3 and obj.parent is not None and obj.parent.texture is not None:
-                        if obj.parent not in drawTexture:
-                            drawTexture.append(obj.parent)
+                if len(vertices)==3 and obj.parent is not None and obj.parent.texture is not None:
+                    if obj.parent not in drawTexture:
+                        drawTexture.append(obj.parent)
 
-                        minX = 999999
-                        maxX = -1
-                        minY = 999999
-                        maxY = -1
+                    minX = 999999
+                    maxX = -1
+                    minY = 999999
+                    maxY = -1
 
-                        for vertex in vertices:
-                            if minX > vertex.x:
-                                minX = vertex.x
-                            if maxX < vertex.x:
-                                maxX = vertex.x
-                            if minY > vertex.y:
-                                minY = vertex.y
-                            if maxY < vertex.y:
-                                maxY= vertex.y
+                    for vertex in vertices:
+                        if minX > vertex.x:
+                            minX = vertex.x
+                        if maxX < vertex.x:
+                            maxX = vertex.x
+                        if minY > vertex.y:
+                            minY = vertex.y
+                        if maxY < vertex.y:
+                            maxY= vertex.y
 
-                        obj.drawRange = [[minX, maxX-minX], [minY, maxY-minY]]
-                        obj.screenVertices = vertices
-                        #obj.textureArea = list_pixels_in_triangle(vertices[0].val, vertices[1].val, vertices[2].val, [width, height])
+                    obj.drawRange = [[minX, maxX-minX], [minY, maxY-minY]]
+                    obj.screenVertices = vertices
+                    #obj.textureArea = list_pixels_in_triangle(vertices[0].val, vertices[1].val, vertices[2].val, [width, height])
             else:
                 if obj.transformed.z < 0:
                     pos = posToScreen(obj.transformed)
