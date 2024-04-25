@@ -131,13 +131,19 @@ void rotatePoints(float x, float y, float z, float rotation_x, float rotation_y,
 }
 
 // [position, self.rotation, (self.rotation+rotation), parent]
-__kernel void calculateCommands(__global float *mainCoords, __global float *requests, __global int *parents, __global float *results, const int num_points) {
+__kernel void calculateCommands(__global float *mainCoords, __global float *requests, __global int *parents, __global float *results, const int num_points, const int level) {
     int i = get_global_id(0);
-    if (i >= num_points) return;    
-
-    // Each point has x, y, z values, so index should be 3 times the point index
-    int idx = i * 6;
+    if (i >= num_points) return;  
     
+    int idx = i*6; 
+    
+    int parent = parents[(i*2)];
+    int thisLevel = parents[(i*2)+1];
+    
+    if(thisLevel != level)
+        return; 
+
+    // Each point has x, y, z values, so index should be 3 times the point index    
     float pos_x = requests[idx];
     float pos_y = requests[idx+1];
     float pos_z = requests[idx+2];
@@ -152,9 +158,8 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     
     float totRot_x = rot_x;
     float totRot_y = rot_y;
-    float totRot_z = rot_z;
+    float totRot_z = rot_z;    
     
-    int parent = parents[i];
     if(parent == -1){
         totPos_x += mainCoords[0];
         totPos_y += mainCoords[1];
@@ -179,20 +184,15 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     float res[3];
     rotatePoints(pos_x, pos_y, pos_z, totRot_x, totRot_y, totRot_z, res);
     rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);
+    //rotatePoints(pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, res);
+    //rotatePoints(res[0], res[1], res[2], totRot_x, totRot_y, totRot_z, res);
     
     totPos_x += res[0];
     totPos_y += res[1];
     totPos_z += res[2];
     
-    if(parent >= 0){
-        rotatePoints(totPos_x, totPos_y, totPos_z, totRot_x, totRot_x, totRot_x, res);
-    }
-    else {
-        res[0] = totPos_x;
-        res[1] = totPos_y;
-        res[2] = totPos_z;
-    }    
-    
+    rotatePoints(totPos_x, totPos_y, totPos_z, totRot_x, totRot_y, totRot_z, res);        
+
     idx = i*6;
     results[idx] = res[0];
     results[idx+1] = res[1];
@@ -214,30 +214,45 @@ def synchronous_cl_commands(cmds, position, rotation):
     mainCoords.extend(position.val)
     mainCoords.extend(rotation.val)
 
+    maxLevel = 0
+
     requests = []
     parents = []
     for cmd in cmds:
         requests.append(cmd[0].val)
         requests.append(cmd[1].val)
-        parents.append(cmd[2])
+        parents.append([cmd[2], cmd[3]])
+
+        if maxLevel < cmd[3]:
+            maxLevel = cmd[3]
 
     # Prepare data arrays
     mainCoords = np.array(mainCoords, dtype=np.float32)
     requests = np.array(requests, dtype=np.float32)
     parents = np.array(parents, dtype=np.int32)
-    results = np.zeros(shape=(len(cmds), 6), dtype=np.float32)  # This will store the output
+    results = np.full((len(cmds), 6), 0, dtype=np.float32)  # This will store the output
 
     # Create OpenCL buffers
     mainCoords_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=mainCoords)
     requests_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=requests)
     parents_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=parents)
-    results_buf = cl.Buffer(context, cl.mem_flags.WRITE_ONLY, size=results.nbytes)
+    results_buf = cl.Buffer(context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=results)
 
     # Execute the kernel
     num_points = len(cmds)
-    programCommands.calculateCommands(queue, (num_points,), None, mainCoords_buf, requests_buf, parents_buf, results_buf, np.int32(num_points))
 
     # Read back the results
+    if False:
+        kernel = cl.Kernel(programCommands, "calculateCommands")
+        kernel.set_args(mainCoords_buf, requests_buf, parents_buf, results_buf, np.int32(num_points))
+        global_work_size = (num_points,)
+        local_work_size = None  # or some value if needed
+        cl.enqueue_nd_range_kernel(queue, kernel, global_work_size, local_work_size)
+    else:
+        for level in range(0, maxLevel+1):
+            programCommands.calculateCommands(queue, (num_points,), None, mainCoords_buf, requests_buf, parents_buf, results_buf, np.int32(num_points), np.int32(level))
+            queue.finish()
+
     cl.enqueue_copy(queue, results, results_buf)
     queue.finish()  # Ensure all queued operations are completed
 
@@ -713,26 +728,21 @@ class Group(Point3D):
         res /= num
         return res
 
-    def transformCommands(self, parent=-1, cmds=None):
+    def transformCommands(self, parent=-1, cmds=None, level=0):
         if cmds is None:
             cmds = []
 
-        cmd = [self.position, self.rotation, parent]
+        cmd = [self.position, self.rotation, parent, level]
         pos = len(cmds)
-        self.commandPos = len(cmds)
+        self.commandPos = pos
         cmds.append(cmd)
 
         for child in self.children:
-            if isinstance(child, Coordinate):
-                cPos = child  # if child.transformed is None else child.transformed
-            else:
-                cPos = child.position  # if child.transformed is None else child.transformed
-
             if isinstance(child, Group):
-                child.transformCommands(pos, cmds)
+                child.transformCommands(pos, cmds, level+1)
             else:
                 child.commandPos = len(cmds)
-                cmds.append([cPos, Coordinate(), pos])
+                cmds.append([child, Coordinate(), pos, level+1])
 
         return cmds
 
