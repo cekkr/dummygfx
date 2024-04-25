@@ -1140,6 +1140,7 @@ class Camera(Group):
     def __init__(self):
         super().__init__()
         self.fov = 1
+        self.cmds = None
 
     async def render(self, scene, pygame, screen):
         width = screen.get_width()
@@ -1176,7 +1177,9 @@ class Camera(Group):
         #scene.reset()
         #await scene.transform(self.position, self.rotation)
 
-        cmds = scene.transformCommands()
+        if self.cmds is None:
+            self.cmds = scene.transformCommands()
+        cmds = self.cmds
         res = synchronous_cl_commands(cmds, self.position, self.rotation)
 
         for obj in scene.listVertices():
@@ -1220,6 +1223,10 @@ class Camera(Group):
                 vertices = []
                 somethingInside = False
                 for vertex in obj.vertices:
+                    if vertex.transformed.z > 0:
+                        somethingInside = False
+                        break
+
                     pos = posToScreen(vertex.transformed)
                     vertices.append(pos)
                     if pos.x > 0 and pos.x < width:
