@@ -84,6 +84,175 @@ __kernel void rotatePoints(__global float *coords, __global float *rotations, __
 
 program = cl.Program(context, kernel_code).build()
 
+###
+###
+###
+
+
+kernel_code = """
+void rotatePoints(float x, float y, float z, float rotation_x, float rotation_y, float rotation_z, float *results) {
+    float radius, angle, sin_theta, cos_theta;
+
+    float xx = x * x;
+    float yy = y * y;
+    float zz = z * z;
+
+    if (rotation_x != 0) {
+        radius = sqrt(xx + yy);
+        angle = atan2(y, x) + radians(rotation_x);
+        sin_theta = sin(angle);
+        cos_theta = cos(angle);
+        x = radius * cos_theta;
+        y = radius * sin_theta;
+    }
+
+    if (rotation_y != 0) {
+        radius = sqrt(yy + zz);
+        angle = atan2(z, y) + radians(rotation_y);
+        sin_theta = sin(angle);
+        cos_theta = cos(angle);
+        y = radius * cos_theta;
+        z = radius * sin_theta;
+    }
+
+    if (rotation_z != 0) {
+        radius = sqrt(xx + zz);
+        angle = atan2(x, z) + radians(rotation_z*-1);
+        sin_theta = sin(angle);
+        cos_theta = cos(angle);
+        z = radius * cos_theta;
+        x = radius * sin_theta;
+    }
+
+    // Save results
+    results[0] = x;
+    results[1] = y;
+    results[2] = z;
+}
+
+// [position, self.rotation, (self.rotation+rotation), parent]
+__kernel void calculateCommands(__global float *mainCoords, __global float *requests, __global int *parents, __global float *results, const int num_points) {
+    int i = get_global_id(0);
+    if (i >= num_points) return;    
+
+    // Each point has x, y, z values, so index should be 3 times the point index
+    int idx = i * 6;
+    
+    float pos_x = requests[idx];
+    float pos_y = requests[idx+1];
+    float pos_z = requests[idx+2];
+    
+    float totPos_x = pos_x;
+    float totPos_y = pos_y;
+    float totPos_z = pos_z;
+    
+    float rot_x = requests[idx+3];
+    float rot_y = requests[idx+4];
+    float rot_z = requests[idx+5];
+    
+    float totRot_x = rot_x;
+    float totRot_y = rot_y;
+    float totRot_z = rot_z;
+    
+    int parent = parents[i];
+    
+    if(parent == -1){
+        float mainPos_x = mainCoords[0];
+        float mainPos_y = mainCoords[1];
+        float mainPos_z = mainCoords[2];
+        
+        float mainRot_x = mainCoords[3];
+        float mainRot_y = mainCoords[4];
+        float mainRot_z = mainCoords[5];
+        
+        totPos_x += mainPos_x;
+        totPos_y += mainPos_y;
+        totPos_z += mainPos_z;
+        
+        totRot_x += mainRot_x;
+        totRot_y += mainRot_y;
+        totRot_z += mainRot_z;
+    }
+    else {
+        idx = i*6;
+        
+        float mainPos_x = results[idx];
+        float mainPos_y = results[idx+1];
+        float mainPos_z = results[idx+2];
+        
+        float mainRot_x = results[idx+3];
+        float mainRot_y = results[idx+4];
+        float mainRot_z = results[idx+5];
+        
+        totPos_x += mainPos_x;
+        totPos_y += mainPos_y;
+        totPos_z += mainPos_z;
+        
+        totRot_x += mainRot_x;
+        totRot_y += mainRot_y;
+        totRot_z += mainRot_z;
+    }
+    
+    float res[3];
+    rotatePoints(pos_x, pos_y, pos_z, totRot_x, totRot_y, totRot_z, res);
+    rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);
+    rotatePoints(res[0], res[1], res[2], totRot_x, totRot_x, totRot_x, res);
+    
+    idx = i*6;
+    results[idx] = res[0];
+    results[idx+1] = res[1];
+    results[idx+2] = res[2];
+    
+    results[idx+3] = totRot_x;
+    results[idx+4] = totRot_y;
+    results[idx+5] = totRot_z;
+}
+"""
+
+programCommands = cl.Program(context, kernel_code).build()
+
+def synchronous_cl_commands(cmds, position, rotation):
+    # Ensure that the context and queue are properly initialized
+    global context, queue, program
+
+    mainCoords = []
+    mainCoords.extend(position.val)
+    mainCoords.extend(rotation.val)
+
+    requests = []
+    parents = []
+    for cmd in cmds:
+        requests.append(cmd[0].val)
+        requests.append(cmd[1].val)
+        parents.append(cmd[2])
+
+    # Prepare data arrays
+    mainCoords = np.array(mainCoords)
+    requests = np.array(requests)
+    parents = np.array(parents)
+    results = np.zeros(shape=(len(cmds), 6))  # This will store the output
+
+    # Create OpenCL buffers
+    mainCoords_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=mainCoords)
+    requests_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=requests)
+    parents_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=parents)
+    results_buf = cl.Buffer(context, cl.mem_flags.WRITE_ONLY, size=results.nbytes)
+
+    # Execute the kernel
+    num_points = len(cmds)
+    programCommands.calculateCommands(queue, (num_points,), None, mainCoords_buf, requests_buf, parents_buf, results_buf, np.int32(num_points))
+
+    # Read back the results
+    cl.enqueue_copy(queue, results, results_buf)
+    queue.finish()  # Ensure all queued operations are completed
+
+    # Convert the results into Coordinate objects
+    resCoords = []
+    for i in range(0, len(results)):
+        resCoords.append(Coordinate([results[i][0], results[i][1], results[i][2]]))
+
+    return resCoords
+
 '''
 def cl_rotatePoints(reqs):
     coords = [point[0] for point in reqs]
@@ -547,6 +716,27 @@ class Group(Point3D):
         res /= num
         return res
 
+    def transformCommands(self, parent=-1, cmds=None):
+        if cmds is None:
+            cmds = []
+
+        cmd = [self.position, self.rotation, parent]
+        pos = len(cmds)
+        cmds.append(cmd)
+
+        for child in self.children:
+            if isinstance(child, Coordinate):
+                cPos = child  # if child.transformed is None else child.transformed
+            else:
+                cPos = child.position  # if child.transformed is None else child.transformed
+
+            if isinstance(child, Group):
+                child.transformCommands(pos, cmds)
+            else:
+                cmds.append([cPos, Coordinate(), pos])
+
+        return cmds
+
     async def transform(self, position=None, rotation=None):
         if position is None:
             position = self.position * 1
@@ -963,6 +1153,9 @@ class Camera(Group):
 
         #scene.reset()
         await scene.transform(self.position, self.rotation)
+
+        cmds = scene.transformCommands()
+        synchronous_cl_commands(cmds, self.position, self.rotation)
 
         midWidth = width/2
         midHeight = height/2
