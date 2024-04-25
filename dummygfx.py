@@ -596,28 +596,29 @@ class Group(Point3D):
         #tasks = [process_child(child) for child in self.children]
 
         res = []
-        if len(self.children) > 32:
-            tasks = []
-            waitFor = []
-            for child in self.children:
-                tasks.append(transformChild(child, position, rotation, totRotation))
-                if len(tasks) > 8:
-                    r = asyncio.gather(*tasks)
-                    waitFor.append(r)
-                    tasks = []
-                    #await asyncio.sleep(0)
-            r = asyncio.gather(*tasks)
-            waitFor.append(r)
-            for wait in waitFor:
-                r = await wait
-                res.extend(r)
-        else:
-            res = []
-            for child in self.children:
-                r = await transformChild(child, position, rotation, totRotation)
-                res.append(r)
 
-        if False:
+        if True:
+            if len(self.children) > 32:
+                tasks = []
+                waitFor = []
+                for child in self.children:
+                    tasks.append(transformChild(child, position, rotation, totRotation))
+                    if len(tasks) > 8:
+                        r = asyncio.gather(*tasks)
+                        waitFor.append(r)
+                        tasks = []
+                        #await asyncio.sleep(0)
+                r = asyncio.gather(*tasks)
+                waitFor.append(r)
+                for wait in waitFor:
+                    r = await wait
+                    res.extend(r)
+            else:
+                res = []
+                for child in self.children:
+                    r = await transformChild(child, position, rotation, totRotation)
+                    res.append(r)
+        else:
             # Use ProcessPoolExecutor to execute tasks on multiple cores
             loop = asyncio.get_running_loop()
             # Prepare tasks to be submitted to the executor
