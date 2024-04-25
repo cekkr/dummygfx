@@ -140,7 +140,7 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     int parent = parents[(i*2)];
     int thisLevel = parents[(i*2)+1];
     
-    if(thisLevel != level)
+    if(thisLevel > level)
         return; 
 
     // Each point has x, y, z values, so index should be 3 times the point index    
@@ -161,9 +161,9 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     float totRot_z = rot_z;    
     
     if(parent == -1){
-        totPos_x += mainCoords[0];
-        totPos_y += mainCoords[1];
-        totPos_z += mainCoords[2];
+        totPos_x = mainCoords[0];
+        totPos_y = mainCoords[1];
+        totPos_z = mainCoords[2];
         
         totRot_x += mainCoords[3];
         totRot_y += mainCoords[4];
@@ -172,42 +172,33 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     else {
         idx = parent*6;
   
-        totPos_x += results[idx];
-        totPos_y += results[idx+1];
-        totPos_z += results[idx+2];
+        totPos_x = results[idx];
+        totPos_y = results[idx+1];
+        totPos_z = results[idx+2];
         
-        totRot_x += results[idx+3];
-        totRot_y += results[idx+4];
-        totRot_z += results[idx+5];
+        totRot_x = results[idx+3];
+        totRot_y = results[idx+4];
+        totRot_z = results[idx+5];        
     }
     
     float res[3];
     rotatePoints(pos_x, pos_y, pos_z, totRot_x, totRot_y, totRot_z, res);
     rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);
-    //rotatePoints(pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, res);
-    //rotatePoints(res[0], res[1], res[2], totRot_x, totRot_y, totRot_z, res);
     
-    totPos_x += res[0];
-    totPos_y += res[1];
-    totPos_z += res[2];
+    res[0] += totPos_x;
+    res[1] += totPos_y;
+    res[2] += totPos_z;      
     
-    if(parent >= 0){
-        rotatePoints(totPos_x, totPos_y, totPos_z, totRot_x, totRot_y, totRot_z, res);
-    }   
-    else {
-        res[0] = totPos_x;
-        res[1] = totPos_y;
-        res[2] = totPos_z;
-    }     
-
+    rotatePoints(res[0], res[1], res[2], totRot_x, totRot_y, totRot_z, res);    
+    
     idx = i*6;
     results[idx] = res[0];
     results[idx+1] = res[1];
     results[idx+2] = res[2];
     
-    results[idx+3] = totRot_x;
-    results[idx+4] = totRot_y;
-    results[idx+5] = totRot_z;
+    results[idx+3] = rot_x;
+    results[idx+4] = rot_y;
+    results[idx+5] = rot_z;
 }
 """
 
@@ -1410,10 +1401,12 @@ async def main():
                 camera.position.z -= move[0]
                 camera.position.x -= move[1]
             elif keyPressing == pygame.K_LEFT:
-                camera.rotation.z -= moveBy * 5
+                #camera.rotation.z -= moveBy * 5
+                mesh.rotation.z -= moveBy * 5
                 #camera.fov += 0.1
             elif keyPressing == pygame.K_RIGHT:
-                camera.rotation.z += moveBy * 5
+                #camera.rotation.z += moveBy * 5
+                mesh.rotation.z += moveBy * 5
                 #camera.fov -= 0.1
 
         screen.fill((0,0,0))
