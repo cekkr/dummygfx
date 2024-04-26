@@ -145,6 +145,9 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     //printf("%d\\n", parent);
     
     if(thisLevel < level) return; 
+    
+    for(int l=0; l<level; l++)
+        parent = parents[(parent*2)];
 
     // Each point has x, y, z values, so index should be 3 times the point index    
     float pos_x = requests[idx];
@@ -189,7 +192,7 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
         
         totRot_x = results[idx+3];
         totRot_y = results[idx+4];
-        totRot_z = results[idx+5]; 
+        totRot_z = results[idx+5];         
     }        
         
     if(level >= 0){
@@ -201,17 +204,18 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
         rot_y = totRot_y;
         rot_z = totRot_z;     
         
-        //if(parent < 3) printf("%f \\n", rot_z);        
+        //if(parent < 3) printf("%f \\n", rot_z);       
     }
     
     float res[3];
     //rotatePoints(totPos_x, totPos_y, totPos_z, rot_x, rot_y, rot_z, res);
     rotatePoints(pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, res);
+    //rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);    
     //rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);
     
     /*res[0] += totPos_x;
     res[1] += totPos_y;
-    res[2] += totPos_z;+7
+    res[2] += totPos_z;*/
     
     //if(parent == 3) printf("%f %f\\n", rot_z, pos_z); 
     
@@ -237,7 +241,7 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     results[idx+4] = rot_y;
     results[idx+5] = rot_z;
     
-    for(int i=0; i<3; i++) requests[idx+i] = results[idx+i];
+    //for(int i=0; i<3; i++) requests[idx+i] = results[idx+i];
 }
 """
 
