@@ -1081,8 +1081,11 @@ async def apply_texture(child, mesh, screen_width, screen_height, ignore_area=No
     def y_in_range(range, y):
         return y >= range[0] and y <= range[1]
 
-    screen_array = np.zeros(shape=(screen_width, screen_height, 3))
-    screen_depth = np.zeros(shape=(screen_width, screen_height))
+    range_width = max_x - min_x
+    range_height = max_y - min_y
+
+    screen_array = np.zeros(shape=(range_width, range_height, 3))
+    screen_depth = np.zeros(shape=(range_width, range_height))
     vertices = [child.screenVertices[0].val, child.screenVertices[1].val, child.screenVertices[2].val]
 
     # Unpack vertices
@@ -1103,6 +1106,8 @@ async def apply_texture(child, mesh, screen_width, screen_height, ignore_area=No
         c = 0.0001
 
     for y in range(min_y, max_y + 1):
+        dy = y - min_y
+
         xx = []
         if y_in_range(range1, y):
             xx.append(x_from_y(m1, b1, y))
@@ -1130,24 +1135,25 @@ async def apply_texture(child, mesh, screen_width, screen_height, ignore_area=No
         if diff > 0:
             x1 = ((xx[0] - child.drawRange[0][0]) / child.drawRange[0][1])*(width-1)
             x2 = ((xx[1] - child.drawRange[0][0]) / child.drawRange[0][1])*(width-1)
-            xInc = (x2-x1) / (diff*1.5)
+            xInc = (x2-x1) / (diff)
 
             for i in range(0, int(diff)):
                 x = i+xx0
+                dx = (i+xx0) - min_x
 
-                if not (0 <= x < screen_width and 0 <= y < screen_height):
+                if not (0 <= dx < range_width and 0 <= dy < range_height):
                     continue
 
-                if 0 <= x1 < texture_array.shape[0] and 0 < x < screen_array.shape[0] and 0 < y < screen_array.shape[1]:
-                    screen_array[x, y] = texture_array[int(x1), yy]
+                if x1 > 0 and x1 < texture_array.shape[0] and yy > 0 and yy <  texture_array.shape[1] and 0 < x < screen_width and 0 < y < screen_height:
 
-                    if i % 5 == 0:
+                    if i % 10 == 0:
                         z = - (a * x + b * y + d) / c
 
                     if ignore_area[x, y] > z:
                         continue
 
-                    screen_depth[x, y] = z #calculate_z(x, y, vertices)
+                    screen_array[dx, dy] = texture_array[int(x1), yy]
+                    screen_depth[dx, dy] = z #calculate_z(x, y, vertices)
                     x1 += xInc
 
     return screen_array, screen_depth, [[int(min_x), int(max_x)], [int(min_y), int(max_y)]]
@@ -1361,23 +1367,26 @@ class Camera(Group):
         tasks = []
         res = []
 
-        ignoreArea = np.zeros((width, height))
+        ignoreArea = np.full((width, height), 0)
 
         def calcIgnoreArea(res):
             for r in res:
                 z = r[1]
                 txtRange = r[2]
 
-                for x in range(txtRange[0][0], txtRange[0][1]):
-                    for y in range(txtRange[1][0], txtRange[1][1]):
-                        if x >= width or y >= height or x < 0 or y < 0:
+                for x in range(0, txtRange[0][1]-txtRange[0][0]):
+                    for y in range(0, txtRange[1][1]-txtRange[1][0]):
+                        dx = x + txtRange[0][0]
+                        dy = y + txtRange[1][0]
+
+                        if dx >= width or dy >= height or dx < 0 or dy < 0:
                             continue
 
                         zz = z[x, y]
                         if zz > 0:
-                            d = ignoreArea[x, y]
+                            d = ignoreArea[dx, dy]
                             if d == 0 or zz < d:
-                                ignoreArea[x, y] = zz
+                                ignoreArea[dx, dy] = zz
 
         loop = asyncio.get_running_loop()
         for mesh in drawTexture:
@@ -1386,13 +1395,13 @@ class Camera(Group):
                     continue
 
                 if True:
-                    if False:
+                    if True:
                         tasks.append(apply_texture(child, mesh, width, height, ignoreArea))
                     else:
                         task = loop.run_in_executor(executor, run_async_in_executor, apply_texture, child, mesh, width, height, ignoreArea)
                         tasks.append(task)
 
-                    if len(tasks) >= num_cores*16:
+                    if len(tasks) >= num_cores*8:
                         print("starting rendering textures")
                         r = await asyncio.gather(*tasks)
                         calcIgnoreArea(r)
@@ -1416,17 +1425,20 @@ class Camera(Group):
             z = r[1]
             txtRange = r[2]
 
-            for x in range(txtRange[0][0], txtRange[0][1]):
-                for y in range(txtRange[1][0], txtRange[1][1]):
-                    if x >= width or y >= height or x < 0 or y < 0:
-                        continue
+            for x in range(0, txtRange[0][1]-txtRange[0][0]):
+                for y in range(0, txtRange[1][1]-txtRange[1][0]):
+                    dx = x + txtRange[0][0]
+                    dy = y + txtRange[1][0]
+
+                    #if dx >= width or dy >= height or dx < 0 or dy < 0:
+                    #    continue
 
                     zz = z[x,y]
                     if zz > 0:
-                        d = depth[x, y]
+                        d = depth[dx, dy]
                         if d == 0 or zz < d:
-                            depth[x,y] = zz
-                            screen_array[x, y] = s[x, y]
+                            depth[dx,dy] = zz
+                            screen_array[dx, dy] = s[x, y]
             i += 1
 
         new_surface = pygame.surfarray.make_surface(screen_array)
