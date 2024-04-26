@@ -1085,6 +1085,23 @@ async def apply_texture(child, mesh, screen_width, screen_height):
     screen_depth = np.zeros(shape=(screen_width, screen_height))
     vertices = [child.screenVertices[0].val, child.screenVertices[1].val, child.screenVertices[2].val]
 
+    # Unpack vertices
+    (x1, y1, z1), (x2, y2, z2), (x3, y3, z3) = vertices
+
+    # Vectors AB and AC
+    AB = np.array([x2 - x1, y2 - y1, z2 - z1])
+    AC = np.array([x3 - x1, y3 - y1, z3 - z1])
+
+    # Cross product to find the normal vector
+    n = np.cross(AB, AC)
+
+    # Plane equation coefficients
+    a, b, c = n
+    d = - (a * x1 + b * y1 + c * z1)
+
+    if c == 0:
+        c = 0.0001
+
     for y in range(min_y, max_y + 1):
         xx = []
         if y_in_range(range1, y):
@@ -1111,7 +1128,7 @@ async def apply_texture(child, mesh, screen_width, screen_height):
         if diff > 0:
             x1 = ((xx[0] - child.drawRange[0][0]) / child.drawRange[0][1])*(width-1)
             x2 = ((xx[1] - child.drawRange[0][0]) / child.drawRange[0][1])*(width-1)
-            xInc = (x2-x1) / diff
+            xInc = (x2-x1) / (diff*1.5)
 
             for i in range(0, int(diff)):
                 x = i+xx0
@@ -1121,7 +1138,7 @@ async def apply_texture(child, mesh, screen_width, screen_height):
 
                 if 0 <= x1 < texture_array.shape[0] and 0 < x < screen_array.shape[0] and 0 < y < screen_array.shape[1]:
                     screen_array[x, y] = texture_array[int(x1), yy]
-                    screen_depth[x, y] = calculate_z(x, y, vertices)
+                    screen_depth[x, y] = - (a * x + b * y + d) / c #calculate_z(x, y, vertices)
                     x1 += xInc
 
     return screen_array, screen_depth, [[min_x, max_x], [min_y, max_y]]
@@ -1342,10 +1359,11 @@ class Camera(Group):
                     continue
 
                 if True:
-                    #tasks.append(apply_texture(child, mesh, width, height))
-
-                    task = loop.run_in_executor(executor, run_async_in_executor, apply_texture, child, mesh, width, height)
-                    tasks.append(task)
+                    if True:
+                        tasks.append(apply_texture(child, mesh, width, height))
+                    else:
+                        task = loop.run_in_executor(executor, run_async_in_executor, apply_texture, child, mesh, width, height)
+                        tasks.append(task)
 
                     if len(tasks) >= num_cores*4:
                         print("starting rendering textures")
@@ -1370,7 +1388,7 @@ class Camera(Group):
 
             for x in range(txtRange[0][0], txtRange[0][1]):
                 for y in range(txtRange[1][0], txtRange[1][1]):
-                    if x >= width or y >= height:
+                    if x >= width or y >= height or x < 0 or y < 0:
                         continue
 
                     zz = z[x,y]
@@ -1422,11 +1440,16 @@ async def main():
         #mesh.setTexture(Image.open('rainbow.jpeg'))
         scene.add(mesh)
 
-        triangle = Triangle()
-        triangle.vertices[0] = Coordinate([0, 1, 0])
-        triangle.vertices[1] = Coordinate([-1, 0, 0])
-        triangle.vertices[2] = Coordinate([1, 0, 0])
-        scene.add(triangle)
+        if False:
+            triangle = Triangle()
+            triangle.vertices[0] = Coordinate([0, 1, 0])
+            triangle.vertices[1] = Coordinate([-1, 0, 0])
+            triangle.vertices[2] = Coordinate([1, 0, 0])
+
+            triangleMesh = Mesh()
+            triangleMesh.add(triangle)
+            triangleMesh.setTexture(Image.open('rainbow.jpeg'))
+            scene.add(triangleMesh)
 
     camera = Camera()
     camera.position.z = -10
