@@ -1150,7 +1150,7 @@ async def apply_texture(child, mesh, screen_width, screen_height, ignore_area=No
                     screen_depth[x, y] = z #calculate_z(x, y, vertices)
                     x1 += xInc
 
-    return screen_array, screen_depth, [[min_x, max_x], [min_y, max_y]]
+    return screen_array, screen_depth, [[int(min_x), int(max_x)], [int(min_y), int(max_y)]]
 
 '''
 def apply_texture_chunk(texture_array, width, height, drawRange, screen_array, pixels):
@@ -1386,7 +1386,7 @@ class Camera(Group):
                     continue
 
                 if True:
-                    if True:
+                    if False:
                         tasks.append(apply_texture(child, mesh, width, height, ignoreArea))
                     else:
                         task = loop.run_in_executor(executor, run_async_in_executor, apply_texture, child, mesh, width, height, ignoreArea)
