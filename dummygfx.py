@@ -131,7 +131,7 @@ void rotatePoints(float x, float y, float z, float rotation_x, float rotation_y,
 }
 
 // [position, self.rotation, (self.rotation+rotation), parent]
-__kernel void calculateCommands(__global float *mainCoords, __global float *requests, __global int *parents, __global float *results, const int num_points, const int level) {
+__kernel void calculateCommands(__global float *mainCoords, __global float *requests, __global float *results, __global int *parents, const int num_points, const int level) {
     int i = get_global_id(0);
     if (i >= num_points) return;  
     
@@ -140,8 +140,7 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     int parent = parents[(i*2)];
     int thisLevel = parents[(i*2)+1];
     
-    if(thisLevel > level)
-        return; 
+    if(thisLevel < level) return; 
 
     // Each point has x, y, z values, so index should be 3 times the point index    
     float pos_x = requests[idx];
@@ -158,47 +157,62 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     
     float totRot_x = rot_x;
     float totRot_y = rot_y;
-    float totRot_z = rot_z;    
+    float totRot_z = rot_z;
     
     if(parent == -1){
-        totPos_x = mainCoords[0];
-        totPos_y = mainCoords[1];
-        totPos_z = mainCoords[2];
+        totPos_x += mainCoords[0];
+        totPos_y += mainCoords[1];
+        totPos_z += mainCoords[2];
         
-        totRot_x = mainCoords[3];
-        totRot_y = mainCoords[4];
-        totRot_z = mainCoords[5];
+        totRot_x += mainCoords[3];
+        totRot_y += mainCoords[4];
+        totRot_z += mainCoords[5];
     }
     else {
-        idx = parent*6;
-  
+        idx = parent * 6; 
+        
         totPos_x = results[idx];
         totPos_y = results[idx+1];
         totPos_z = results[idx+2];
         
         totRot_x = results[idx+3];
         totRot_y = results[idx+4];
-        totRot_z = results[idx+5];        
+        totRot_z = results[idx+5]; 
     }
     
+    totPos_x += pos_x;
+    totPos_y += pos_y;
+    totPos_z += pos_z;
+    
+    totRot_x += rot_x;
+    totRot_y += rot_y;
+    totRot_z += rot_z;
+    
     float res[3];
-    rotatePoints(pos_x, pos_y, pos_z, totRot_x, totRot_y, totRot_z, res);
-    rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);
+    rotatePoints(totPos_x, totPos_y, totPos_z, totRot_x, totRot_y, totRot_z, res);
+    //rotatePoints(pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, res);
+    //rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);
     
-    totPos_x += res[0];
+    /*totPos_x += res[0];
     totPos_y += res[1];
-    totPos_z += res[2];
+    totPos_z += res[2];*/
     
-    rotatePoints(totPos_x, totPos_y, totPos_z, totRot_x+rot_x, totRot_y+rot_y, totRot_z+rot_z, res);      
+    //res[0] += totPos_x;
+    //res[1] += totPos_y;
+    //res[2] += totPos_z;
+    
+    //rotatePoints(res[0], res[1], res[2], totRot_x, totRot_y, totRot_z, res);
     
     idx = i*6;
     results[idx] = res[0];
     results[idx+1] = res[1];
     results[idx+2] = res[2];
     
-    results[idx+3] = totRot_x+rot_x;
-    results[idx+4] = totRot_y+rot_y;
-    results[idx+5] = totRot_z+rot_z;
+    /*results[idx+3] = rot_x;
+    results[idx+4] = rot_y;
+    results[idx+5] = rot_z;*/
+    
+    //for(int i=0; i<6; i++) requests[idx+i] = results[idx+i];
 }
 """
 
@@ -232,7 +246,7 @@ def synchronous_cl_commands(cmds, position, rotation):
 
     # Create OpenCL buffers
     mainCoords_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=mainCoords)
-    requests_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=requests)
+    requests_buf = cl.Buffer(context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=requests)
     parents_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=parents)
     results_buf = cl.Buffer(context, cl.mem_flags.READ_WRITE | cl.mem_flags.COPY_HOST_PTR, hostbuf=results)
 
@@ -241,15 +255,26 @@ def synchronous_cl_commands(cmds, position, rotation):
 
     # Read back the results
     if False:
-        kernel = cl.Kernel(programCommands, "calculateCommands")
-        kernel.set_args(mainCoords_buf, requests_buf, parents_buf, results_buf, np.int32(num_points))
-        global_work_size = (num_points,)
-        local_work_size = None  # or some value if needed
-        cl.enqueue_nd_range_kernel(queue, kernel, global_work_size, local_work_size)
-    else:
-        for level in range(0, maxLevel+1):
-            programCommands.calculateCommands(queue, (num_points,), None, mainCoords_buf, requests_buf, parents_buf, results_buf, np.int32(num_points), np.int32(level))
+        for level in range(0, maxLevel + 1):
+            level = maxLevel - level
+            kernel = cl.Kernel(programCommands, "calculateCommands")
+            kernel.set_args(mainCoords_buf, requests_buf, parents_buf, np.int32(num_points), np.int32(level))
+            global_work_size = (num_points,)
+            local_work_size = None  # or some value if needed
+            cl.enqueue_nd_range_kernel(queue, kernel, global_work_size, local_work_size)
             queue.finish()
+    else:
+        if True:
+            for level in range(0, maxLevel+1):
+                #level = maxLevel - level
+                programCommands.calculateCommands(queue, (num_points,), None, mainCoords_buf, requests_buf, results_buf, parents_buf, np.int32(num_points), np.int32(level))
+                queue.finish()
+
+        if False:
+            for level in range(0, maxLevel+1):
+                #level = maxLevel - level
+                programCommands.calculateCommands(queue, (num_points,), None, mainCoords_buf, requests_buf, results_buf, parents_buf, np.int32(num_points), np.int32(level))
+                queue.finish()
 
     cl.enqueue_copy(queue, results, results_buf)
     queue.finish()  # Ensure all queued operations are completed
@@ -1405,8 +1430,8 @@ async def main():
                 mesh.rotation.z -= moveBy
                 #camera.fov += 0.1
             elif keyPressing == pygame.K_RIGHT:
-                #camera.rotation.z += moveBy * 5
-                mesh.rotation.z += moveBy
+                camera.rotation.z += moveBy * 5
+                #mesh.rotation.z += moveBy
                 #camera.fov -= 0.1
 
         screen.fill((0,0,0))
