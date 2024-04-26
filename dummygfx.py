@@ -190,12 +190,12 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
         
         //if(parent == 3) printf("%f %d\\n", totPos_z, level);      
         
-        totRot_x = results[idx+3];
-        totRot_y = results[idx+4];
-        totRot_z = results[idx+5];         
+        totRot_x = requests[idx+3];
+        totRot_y = requests[idx+4];
+        totRot_z = requests[idx+5];         
     }        
         
-    if(level >= 0){
+    if(level > 0){
         pos_x = totPos_x;
         pos_y = totPos_y;
         pos_z = totPos_z;
@@ -241,7 +241,7 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     results[idx+4] = rot_y;
     results[idx+5] = rot_z;
     
-    //for(int i=0; i<3; i++) requests[idx+i] = results[idx+i];
+    for(int i=0; i<3; i++) requests[idx+i] = results[idx+i];
 }
 """
 
@@ -297,7 +297,7 @@ def synchronous_cl_commands(cmds, position, rotation):
             queue.finish()
     else:
         if True:
-            for level in range(-1, maxLevel+1):
+            for level in range(0, maxLevel+1):
                 #level = maxLevel - level
                 #accResults_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=results)
                 programCommands.calculateCommands(queue, (num_points,), None, mainCoords_buf, requests_buf, results_buf, parents_buf, np.int32(num_points), np.int32(level))
