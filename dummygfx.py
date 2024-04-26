@@ -1052,7 +1052,7 @@ def calculate_z(x, y, vertices):
     return z
 
 
-async def apply_texture(child, mesh, screen_width, screen_height):
+async def apply_texture(child, mesh, screen_width, screen_height, ignore_area=None):
     texture_array = mesh.texture_array
 
     width = mesh.image.width
@@ -1124,6 +1124,8 @@ async def apply_texture(child, mesh, screen_width, screen_height):
         yy = (y - child.drawRange[1][0]) / child.drawRange[1][1]
         yy = int(yy*(height-1))
 
+        z = 0
+
         diff = math.ceil(xx[1] - xx[0])
         if diff > 0:
             x1 = ((xx[0] - child.drawRange[0][0]) / child.drawRange[0][1])*(width-1)
@@ -1138,7 +1140,14 @@ async def apply_texture(child, mesh, screen_width, screen_height):
 
                 if 0 <= x1 < texture_array.shape[0] and 0 < x < screen_array.shape[0] and 0 < y < screen_array.shape[1]:
                     screen_array[x, y] = texture_array[int(x1), yy]
-                    screen_depth[x, y] = - (a * x + b * y + d) / c #calculate_z(x, y, vertices)
+
+                    if i % 5 == 0:
+                        z = - (a * x + b * y + d) / c
+
+                    if ignore_area[x, y] > z:
+                        continue
+
+                    screen_depth[x, y] = z #calculate_z(x, y, vertices)
                     x1 += xInc
 
     return screen_array, screen_depth, [[min_x, max_x], [min_y, max_y]]
@@ -1352,6 +1361,24 @@ class Camera(Group):
         tasks = []
         res = []
 
+        ignoreArea = np.zeros((width, height))
+
+        def calcIgnoreArea(res):
+            for r in res:
+                z = r[1]
+                txtRange = r[2]
+
+                for x in range(txtRange[0][0], txtRange[0][1]):
+                    for y in range(txtRange[1][0], txtRange[1][1]):
+                        if x >= width or y >= height or x < 0 or y < 0:
+                            continue
+
+                        zz = z[x, y]
+                        if zz > 0:
+                            d = ignoreArea[x, y]
+                            if d == 0 or zz < d:
+                                ignoreArea[x, y] = zz
+
         loop = asyncio.get_running_loop()
         for mesh in drawTexture:
             for child in mesh.children:
@@ -1360,20 +1387,23 @@ class Camera(Group):
 
                 if True:
                     if True:
-                        tasks.append(apply_texture(child, mesh, width, height))
+                        tasks.append(apply_texture(child, mesh, width, height, ignoreArea))
                     else:
-                        task = loop.run_in_executor(executor, run_async_in_executor, apply_texture, child, mesh, width, height)
+                        task = loop.run_in_executor(executor, run_async_in_executor, apply_texture, child, mesh, width, height, ignoreArea)
                         tasks.append(task)
 
-                    if len(tasks) >= num_cores*4:
+                    if len(tasks) >= num_cores*16:
                         print("starting rendering textures")
                         r = await asyncio.gather(*tasks)
+                        calcIgnoreArea(r)
                         print("textures rendered")
                         res.extend(r)
                         tasks = []
 
                 else:
-                    res.append(await apply_texture(child, mesh, width, height))
+                    r = await apply_texture(child, mesh, width, height, ignoreArea)
+                    calcIgnoreArea(r)
+                    res.append(r)
 
         if len(tasks) > 0:
             r = await asyncio.gather(*tasks)
@@ -1437,7 +1467,7 @@ async def main():
         mesh = Mesh()
         mesh.loadModelTxt('model.txt')
         #mesh.loadModelTxt('model.txt')
-        #mesh.setTexture(Image.open('rainbow.jpeg'))
+        mesh.setTexture(Image.open('rainbow.jpeg'))
         scene.add(mesh)
 
         if False:
