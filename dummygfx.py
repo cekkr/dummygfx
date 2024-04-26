@@ -140,7 +140,7 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     int parent = parents[(i*2)];
     int thisLevel = parents[(i*2)+1];
     
-    //if(thisLevel > level) return; 
+    //if(thisLevel < level) return; 
 
     // Each point has x, y, z values, so index should be 3 times the point index    
     float pos_x = requests[idx];
@@ -157,46 +157,44 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     
     float totRot_x = rot_x;
     float totRot_y = rot_y;
-    float totRot_z = rot_z;
+    float totRot_z = rot_z;           
     
     if(parent == -1){
-        totPos_x = mainCoords[0];
-        totPos_y = mainCoords[1];
-        totPos_z = mainCoords[2];
-        
-        totRot_x = mainCoords[3];
-        totRot_y = mainCoords[4];
-        totRot_z = mainCoords[5];
+        totPos_x += mainCoords[0];
+        totPos_y += mainCoords[1];
+        totPos_z += mainCoords[2];     
+    
+        totRot_x += mainCoords[3];
+        totRot_y += mainCoords[4];
+        totRot_z += mainCoords[5];
     }
     else {
         idx = parent * 6; 
         
-        totPos_x = results[idx];
-        totPos_y = results[idx+1];
-        totPos_z = results[idx+2];
+        totPos_x += results[idx];
+        totPos_y += results[idx+1];
+        totPos_z += results[idx+2];
         
-        totRot_x = results[idx+3];
-        totRot_y = results[idx+4];
-        totRot_z = results[idx+5]; 
+        totRot_x += results[idx+3];
+        totRot_y += results[idx+4];
+        totRot_z += results[idx+5]; 
     }
-    
-    if(level > thisLevel){
-        pos_x += totPos_x;
-        pos_y += totPos_y;
-        pos_z += totPos_z;
-        rot_x = totRot_x;
-        rot_y = totRot_y;
-        rot_z = totRot_z;
-    }
+
+    pos_x += totPos_x;
+    pos_y += totPos_y;
+    pos_z += totPos_z;
+    rot_x = totRot_x;
+    rot_y = totRot_y;
+    rot_z = totRot_z;
     
     float res[3];
     //rotatePoints(totPos_x, totPos_y, totPos_z, rot_x, rot_y, rot_z, res);
     rotatePoints(pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, res);
     //rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);
     
-    res[0] += totPos_x;
-    res[1] += totPos_y;
-    res[2] += totPos_z;
+    /*res[0] += pos_x;
+    res[1] += pos_y;
+    res[2] += pos_z;*/
     
     /*totPos_x += res[0];
     totPos_y += res[1];
@@ -213,9 +211,9 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     results[idx+1] = res[1];
     results[idx+2] = res[2];
     
-    results[idx+3] = rot_x + totRot_x;
-    results[idx+4] = rot_y + totRot_y;
-    results[idx+5] = rot_z + totRot_z;
+    results[idx+3] = totRot_x+rot_x;
+    results[idx+4] = totRot_y+rot_y;
+    results[idx+5] = totRot_z+rot_z;
     
     //for(int i=0; i<6; i++) requests[idx+i] = results[idx+i];
 }
@@ -235,6 +233,7 @@ def synchronous_cl_commands(cmds, position, rotation):
 
     requests = []
     parents = []
+    #cmds = cmds[::-1]
     for cmd in cmds:
         requests.append(cmd[0].val)
         requests.append(cmd[1].val)
@@ -277,7 +276,7 @@ def synchronous_cl_commands(cmds, position, rotation):
 
         if False:
             for level in range(0, maxLevel+1):
-                level = maxLevel - level
+                #level = maxLevel - level
                 programCommands.calculateCommands(queue, (num_points,), None, mainCoords_buf, requests_buf, results_buf, parents_buf, np.int32(num_points), np.int32(level))
                 queue.finish()
 
@@ -1205,14 +1204,15 @@ class Camera(Group):
         #scene.reset()
         #await scene.transform(self.position, self.rotation)
 
-        if self.cmds is None:
-            self.cmds = scene.transformCommands()
-        cmds = self.cmds
-        res = synchronous_cl_commands(cmds, self.position, self.rotation)
+        if True:
+            if self.cmds is None:
+                self.cmds = scene.transformCommands()
+            cmds = self.cmds
+            res = synchronous_cl_commands(cmds, self.position, self.rotation)
 
-        for obj in scene.listVertices():
-            if obj.commandPos >= 0:
-                obj.transformed = res[obj.commandPos]
+            for obj in scene.listVertices():
+                if obj.commandPos >= 0:
+                    obj.transformed = res[obj.commandPos]
 
         midWidth = width/2
         midHeight = height/2
