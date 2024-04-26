@@ -19,6 +19,8 @@ from multiprocessing import Pool
 import os
 import functools
 
+os.environ["PYOPENCL_CTX"] = "0"
+
 # Set up OpenCL context and queue
 platform = cl.get_platforms()[0]
 devices = platform.get_devices()
@@ -140,7 +142,9 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     int parent = parents[(i*2)];
     int thisLevel = parents[(i*2)+1];
     
-    //if(thisLevel < level) return; 
+    //printf("%d\\n", parent);
+    
+    if(thisLevel < level) return; 
 
     // Each point has x, y, z values, so index should be 3 times the point index    
     float pos_x = requests[idx];
@@ -157,44 +161,55 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     
     float totRot_x = rot_x;
     float totRot_y = rot_y;
-    float totRot_z = rot_z;           
+    float totRot_z = rot_z;
     
     if(parent == -1){
         totPos_x += mainCoords[0];
         totPos_y += mainCoords[1];
-        totPos_z += mainCoords[2];     
-    
+        totPos_z += mainCoords[2];
+        
         totRot_x += mainCoords[3];
         totRot_y += mainCoords[4];
         totRot_z += mainCoords[5];
+        
+        rot_x = totRot_x;
+        rot_y = totRot_y;
+        rot_z = totRot_z;
     }
     else {
         idx = parent * 6; 
         
         totPos_x += results[idx];
         totPos_y += results[idx+1];
-        totPos_z += results[idx+2];
+        totPos_z += results[idx+2];    
         
-        totRot_x += results[idx+3];
-        totRot_y += results[idx+4];
-        totRot_z += results[idx+5]; 
+        //if(parent == 4) printf("%f %d\\n", results[idx+2], level);      
+        
+        totRot_x = results[idx+3];
+        totRot_y = results[idx+4];
+        totRot_z = results[idx+5]; 
     }
-
-    pos_x += totPos_x;
-    pos_y += totPos_y;
-    pos_z += totPos_z;
-    rot_x = totRot_x;
-    rot_y = totRot_y;
-    rot_z = totRot_z;
+    
+    pos_x = totPos_x;
+    pos_y = totPos_y;
+    pos_z = totPos_z;
+    
+    if(level > 0){
+        rot_x = totRot_x;
+        rot_y = totRot_y;
+        rot_z = totRot_z;        
+    }
     
     float res[3];
     //rotatePoints(totPos_x, totPos_y, totPos_z, rot_x, rot_y, rot_z, res);
     rotatePoints(pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, res);
     //rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);
     
-    /*res[0] += pos_x;
-    res[1] += pos_y;
-    res[2] += pos_z;*/
+    /*res[0] = totPos_x;
+    res[1] = totPos_y;
+    res[2] = totPos_z;*/
+    
+    //if(parent == 3) printf("%f %f\\n", rot_z, pos_z); 
     
     /*totPos_x += res[0];
     totPos_y += res[1];
@@ -210,12 +225,15 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     results[idx] = res[0];
     results[idx+1] = res[1];
     results[idx+2] = res[2];
+    //printf("%f\\n", res[2]);
     
-    results[idx+3] = totRot_x+rot_x;
-    results[idx+4] = totRot_y+rot_y;
-    results[idx+5] = totRot_z+rot_z;
+    //if(parent == -1) printf("%f \\n", rot_z);
     
-    //for(int i=0; i<6; i++) requests[idx+i] = results[idx+i];
+    results[idx+3] = rot_x;
+    results[idx+4] = rot_y;
+    results[idx+5] = rot_z;
+    
+    for(int i=0; i<6; i++) requests[idx+i] = results[idx+i];
 }
 """
 
@@ -233,11 +251,13 @@ def synchronous_cl_commands(cmds, position, rotation):
 
     requests = []
     parents = []
-    #cmds = cmds[::-1]
+    cmds = cmds[::-1]
     for cmd in cmds:
         requests.append(cmd[0].val)
         requests.append(cmd[1].val)
-        parents.append([cmd[2], cmd[3]])
+
+        parent = len(cmds)-(cmd[2]+1) if cmd[2] >= 0 else -1
+        parents.append([parent, cmd[3]])
 
         if maxLevel < cmd[3]:
             maxLevel = cmd[3]
@@ -271,22 +291,27 @@ def synchronous_cl_commands(cmds, position, rotation):
         if True:
             for level in range(0, maxLevel+1):
                 #level = maxLevel - level
+                #accResults_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=results)
                 programCommands.calculateCommands(queue, (num_points,), None, mainCoords_buf, requests_buf, results_buf, parents_buf, np.int32(num_points), np.int32(level))
+                #cl.enqueue_copy(queue, results, results_buf)
                 queue.finish()
 
         if False:
             for level in range(0, maxLevel+1):
-                #level = maxLevel - level
+                level = maxLevel - level
                 programCommands.calculateCommands(queue, (num_points,), None, mainCoords_buf, requests_buf, results_buf, parents_buf, np.int32(num_points), np.int32(level))
                 queue.finish()
 
     cl.enqueue_copy(queue, results, results_buf)
     queue.finish()  # Ensure all queued operations are completed
 
+    #print(results)
+
     # Convert the results into Coordinate objects
     resCoords = []
     for i in range(0, len(results)):
-        resCoords.append(Coordinate([results[i][0], results[i][1], results[i][2]]))
+        ii = len(results)-(i+1)
+        resCoords.append(Coordinate([results[ii][0], results[ii][1], results[ii][2]]))
 
     return resCoords
 
@@ -1204,15 +1229,14 @@ class Camera(Group):
         #scene.reset()
         #await scene.transform(self.position, self.rotation)
 
-        if True:
-            if self.cmds is None:
-                self.cmds = scene.transformCommands()
-            cmds = self.cmds
-            res = synchronous_cl_commands(cmds, self.position, self.rotation)
+        if self.cmds is None:
+            self.cmds = scene.transformCommands()
+        cmds = self.cmds
+        res = synchronous_cl_commands(cmds, self.position, self.rotation)
 
-            for obj in scene.listVertices():
-                if obj.commandPos >= 0:
-                    obj.transformed = res[obj.commandPos]
+        for obj in scene.listVertices():
+            if obj.commandPos >= 0:
+                obj.transformed = res[obj.commandPos]
 
         midWidth = width/2
         midHeight = height/2
@@ -1394,7 +1418,7 @@ async def main():
         triangle.vertices[0] = Coordinate([0, 1, 0])
         triangle.vertices[1] = Coordinate([-1, 0, 0])
         triangle.vertices[2] = Coordinate([1, 0, 0])
-        scene.add(triangle)
+        #scene.add(triangle)
 
     camera = Camera()
     camera.position.z = -10
@@ -1437,13 +1461,18 @@ async def main():
                 camera.position.z -= move[0]
                 camera.position.x -= move[1]
             elif keyPressing == pygame.K_LEFT:
-                #camera.rotation.z -= moveBy * 5
-                triangle.rotation.z -= moveBy
+                camera.rotation.z -= moveBy * 5
+                #mesh.rotation.z -= moveBy * 5
                 #camera.fov += 0.1
             elif keyPressing == pygame.K_RIGHT:
                 camera.rotation.z += moveBy * 5
-                #mesh.rotation.z += moveBy
+                #mesh.rotation.z += moveBy * 5
                 #camera.fov -= 0.1
+            elif keyPressing == pygame.K_a:
+                mesh.rotation.z -= moveBy * 5
+            elif keyPressing == pygame.K_d:
+                mesh.rotation.z += moveBy * 5
+
 
         screen.fill((0,0,0))
         await camera.render(scene, pygame, screen)
