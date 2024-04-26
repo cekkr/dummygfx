@@ -1479,7 +1479,7 @@ async def main():
         mesh = Mesh()
         mesh.loadModelTxt('model.txt')
         #mesh.loadModelTxt('model.txt')
-        mesh.setTexture(Image.open('rainbow.jpeg'))
+        #mesh.setTexture(Image.open('rainbow.jpeg'))
         scene.add(mesh)
 
         if False:
