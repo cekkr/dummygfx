@@ -183,7 +183,7 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
         totPos_y += results[idx+1];
         totPos_z += results[idx+2];    
         
-        //if(parent == 4) printf("%f %d\\n", results[idx+2], level);      
+        //if(parent == 3) printf("%f %d\\n", totPos_z, level);      
         
         totRot_x = results[idx+3];
         totRot_y = results[idx+4];
@@ -193,11 +193,13 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     pos_x = totPos_x;
     pos_y = totPos_y;
     pos_z = totPos_z;
-    
+        
     if(level > 0){
         rot_x = totRot_x;
         rot_y = totRot_y;
-        rot_z = totRot_z;        
+        rot_z = totRot_z;     
+        
+        //if(parent < 3) printf("%f \\n", rot_z);
     }
     
     float res[3];
@@ -205,9 +207,9 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     rotatePoints(pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, res);
     //rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);
     
-    /*res[0] = totPos_x;
-    res[1] = totPos_y;
-    res[2] = totPos_z;*/
+    /*res[0] += pos_x;
+    res[1] += pos_y;
+    res[2] += pos_z;*/
     
     //if(parent == 3) printf("%f %f\\n", rot_z, pos_z); 
     
@@ -215,9 +217,9 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     totPos_y += res[1];
     totPos_z += res[2];*/
     
-    //res[0] += totPos_x;
-    //res[1] += totPos_y;
-    //res[2] += totPos_z;
+    /*res[0] += totPos_x*2;
+    res[1] += totPos_y*2;
+    res[2] += totPos_z*2;*/
     
     //rotatePoints(res[0], res[1], res[2], totRot_x, totRot_y, totRot_z, res);
     
@@ -227,13 +229,13 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     results[idx+2] = res[2];
     //printf("%f\\n", res[2]);
     
-    //if(parent == -1) printf("%f \\n", rot_z);
+    //if(parent >= 3) printf("%f \\n", res[2]);
     
     results[idx+3] = rot_x;
     results[idx+4] = rot_y;
     results[idx+5] = rot_z;
     
-    for(int i=0; i<6; i++) requests[idx+i] = results[idx+i];
+    for(int i=0; i<3; i++) requests[idx+i] = results[idx+i];
 }
 """
 
@@ -1418,7 +1420,7 @@ async def main():
         triangle.vertices[0] = Coordinate([0, 1, 0])
         triangle.vertices[1] = Coordinate([-1, 0, 0])
         triangle.vertices[2] = Coordinate([1, 0, 0])
-        #scene.add(triangle)
+        scene.add(triangle)
 
     camera = Camera()
     camera.position.z = -10
