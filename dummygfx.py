@@ -1011,6 +1011,8 @@ class Triangle(Group):
         for i in range(0,3):
             self.vertices.append(Coordinate())
 
+        self.drawRange = [[0,0],[0,0]]
+
 class Mesh(Group):
     def __init__(self):
         super().__init__()
@@ -1652,7 +1654,7 @@ async def main():
             #mesh.loadModelTxt('flowers.txt')
             mesh.loadModelTxt('supercar.txt')
             #mesh.loadModelTxt('pokemon.txt')
-            mesh.setTexture(Image.open('rainbow.jpeg'))
+            #mesh.setTexture(Image.open('rainbow.jpeg'))
             scene.add(mesh)
 
         if False:
