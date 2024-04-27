@@ -1288,7 +1288,7 @@ def numba_apply_texture(width, height, drawRange, texture_array, screenVertices,
 
                 if x1 > 0 and x1 < texture_array.shape[0] and yy > 0 and yy <  texture_array.shape[1] and 0 < x < screen_width and 0 < y < screen_height:
 
-                    if i % 10 == 0:
+                    if i % 2 == 0:
                         z = - (a * x + b * y + d) / c
 
                     if ignore_area[x, y] > z:
