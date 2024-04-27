@@ -1479,8 +1479,8 @@ async def main():
         scene.add(mesh)
     else:
         mesh = Mesh()
-        mesh.loadModelTxt('pokemon.txt')
-        #mesh.loadModelTxt('model.txt')
+        #mesh.loadModelTxt('flowers.txt')
+        mesh.loadModelTxt('supercar.txt')
         #mesh.setTexture(Image.open('rainbow.jpeg'))
         scene.add(mesh)
 
@@ -1526,7 +1526,7 @@ async def main():
                 keyPressing = None
 
         if keyPressing is not None:
-            moveBy = 0.1 * (120/avgFps)
+            moveBy = 1 * (120/avgFps)
             if keyPressing == pygame.K_UP:
                 move = point_on_unit_circle(camera.rotation.z, moveBy)
                 camera.position.z += move[0]
@@ -1536,17 +1536,21 @@ async def main():
                 camera.position.z -= move[0]
                 camera.position.x -= move[1]
             elif keyPressing == pygame.K_LEFT:
-                camera.rotation.z -= moveBy * 5
+                camera.rotation.z -= moveBy
                 #mesh.rotation.z -= moveBy * 5
                 #camera.fov += 0.1
             elif keyPressing == pygame.K_RIGHT:
-                camera.rotation.z += moveBy * 5
+                camera.rotation.z += moveBy
                 #mesh.rotation.z += moveBy * 5
                 #camera.fov -= 0.1
             elif keyPressing == pygame.K_a:
-                mesh.rotation.z -= moveBy * 5
+                mesh.rotation.z -= moveBy
             elif keyPressing == pygame.K_d:
-                mesh.rotation.z += moveBy * 5
+                mesh.rotation.z += moveBy
+            elif keyPressing == pygame.K_w:
+                camera.position.y += moveBy
+            elif keyPressing == pygame.K_s:
+                camera.position.y -= moveBy
 
 
         screen.fill((0,0,0))
