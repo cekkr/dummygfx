@@ -245,6 +245,8 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
 }
 """
 
+#kernel_code = kernel_code.replace('float', 'double')
+
 programCommands = cl.Program(context, kernel_code).build()
 
 def synchronous_cl_commands(cmds, position, rotation):
@@ -1477,7 +1479,7 @@ async def main():
         scene.add(mesh)
     else:
         mesh = Mesh()
-        mesh.loadModelTxt('model.txt')
+        mesh.loadModelTxt('pokemon.txt')
         #mesh.loadModelTxt('model.txt')
         #mesh.setTexture(Image.open('rainbow.jpeg'))
         scene.add(mesh)
