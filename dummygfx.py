@@ -1247,6 +1247,7 @@ def numba_apply_texture(width, height, drawRange, texture_array, screenVertices,
     if c == 0:
         c = 0.0001
 
+    hasPixels = False
     for y in range(min_y, max_y + 1):
         dy = y - min_y
 
@@ -1277,7 +1278,7 @@ def numba_apply_texture(width, height, drawRange, texture_array, screenVertices,
         if diff > 0:
             x1 = ((xx[0] - drawRange[0][0]) / drawRange[0][1])*(width-1)
             x2 = ((xx[1] - drawRange[0][0]) / drawRange[0][1])*(width-1)
-            xInc = (x2-x1) / (diff)
+            xInc = (x2-x1) / (diff*1.5)
 
             for i in range(0, int(diff)):
                 x = i+xx0
@@ -1300,8 +1301,9 @@ def numba_apply_texture(width, height, drawRange, texture_array, screenVertices,
                     screen_array[dx, dy] = texture_array[int(x1), yy]
                     screen_depth[dx, dy] = z #calculate_z(x, y, vertices)
                     x1 += xInc
+                    hasPixels = True
 
-    return screen_array, screen_depth, np.array([[int(min_x), int(max_x)], [int(min_y), int(max_y)]], dtype=np.int32)
+    return screen_array, screen_depth, np.array([[int(min_x), int(max_x)], [int(min_y), int(max_y)]], dtype=np.int32), hasPixels
 
 async def async_numba_apply_texture(width, height, drawRange, texture_array, screenVertices, screen_width, screen_height, ignore_area=None):
     return numba_apply_texture(width, height, drawRange, texture_array, screenVertices, screen_width, screen_height, ignore_area)
@@ -1510,8 +1512,6 @@ class Camera(Group):
                         if pos.y > 0 and pos.y < height:
                             drawCircle(pygame, pos.x, pos.y, int(pos.z), screen)
 
-        screen_array = pygame.surfarray.array3d(screen)
-
         tasks = []
         res = []
 
@@ -1556,7 +1556,7 @@ class Camera(Group):
                         task = loop.run_in_executor(executor, run_async_in_executor, apply_texture, child, mesh, width, height, ignoreArea)
                         tasks.append(task)
 
-                    if len(tasks) >= num_cores:
+                    if len(tasks) >= 128:
                         print("starting rendering textures")
                         r = await asyncio.gather(*tasks)
                         calcIgnoreArea(r)
@@ -1575,28 +1575,42 @@ class Camera(Group):
             print("textures rendered")
             res.extend(r)
 
-        depth = np.zeros((width, height))
-        i = 0
-        for r in res:
-            s = r[0]
-            z = r[1]
-            txtRange = r[2]
+        @njit()
+        def calcScreen(res, width, height, screen_array):
 
-            for x in range(0, txtRange[0][1]-txtRange[0][0]):
-                for y in range(0, txtRange[1][1]-txtRange[1][0]):
-                    dx = x + txtRange[0][0]
-                    dy = y + txtRange[1][0]
+            depth = np.zeros((width, height))
+            i = 0
+            for r in res:
+                s = r[0]
+                z = r[1]
+                txtRange = r[2]
+                hasPixels = r[3]
 
-                    #if dx >= width or dy >= height or dx < 0 or dy < 0:
-                    #    continue
+                if not hasPixels:
+                    continue
 
-                    zz = z[x,y]
-                    if zz > 0:
-                        d = depth[dx, dy]
-                        if d == 0 or zz < d:
-                            depth[dx,dy] = zz
-                            screen_array[dx, dy] = s[x, y]
-            i += 1
+                for x in range(0, txtRange[0][1]-txtRange[0][0]):
+                    for y in range(0, txtRange[1][1]-txtRange[1][0]):
+                        dx = x + txtRange[0][0]
+                        dy = y + txtRange[1][0]
+
+                        #if dx >= width or dy >= height or dx < 0 or dy < 0:
+                        #    continue
+
+                        zz = z[x,y]
+                        if zz > 0:
+                            d = depth[dx, dy]
+                            if d == 0 or zz < d:
+                                depth[dx,dy] = zz
+                                screen_array[dx, dy] = s[x, y]
+                i += 1
+
+            return screen_array
+
+        screen_array = pygame.surfarray.array3d(screen)
+
+        if len(res) > 0:
+            screen_array = calcScreen(res, width, height, screen_array)
 
         new_surface = pygame.surfarray.make_surface(screen_array)
         screen.blit(new_surface, (0, 0))
@@ -1633,12 +1647,13 @@ async def main():
         scene.add(triangle)
         scene.add(mesh)
     else:
-        mesh = Mesh()
-        #mesh.loadModelTxt('flowers.txt')
-        #mesh.loadModelTxt('supercar.txt')
-        mesh.loadModelTxt('pokemon.txt')
-        mesh.setTexture(Image.open('rainbow.jpeg'))
-        scene.add(mesh)
+        if True:
+            mesh = Mesh()
+            #mesh.loadModelTxt('flowers.txt')
+            mesh.loadModelTxt('supercar.txt')
+            #mesh.loadModelTxt('pokemon.txt')
+            mesh.setTexture(Image.open('rainbow.jpeg'))
+            scene.add(mesh)
 
         if False:
             triangle = Triangle()
@@ -1652,7 +1667,7 @@ async def main():
             scene.add(triangleMesh)
 
     camera = Camera()
-    camera.position.z = -10
+    camera.position.z = -2
 
     # Initialize Pygame
     pygame.init()
