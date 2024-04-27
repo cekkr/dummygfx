@@ -18,6 +18,8 @@ from threading import Thread, Lock
 from multiprocessing import Pool
 import os
 import functools
+from numba import njit
+from numba.typed import List
 
 os.environ["PYOPENCL_CTX"] = "0"
 
@@ -566,6 +568,21 @@ def find_line_equation(p1, p2):
 
     return m, b
 
+@njit
+def numba_find_line_equation(p1, p2):
+    x1, y1 = p1
+    x2, y2 = p2
+
+    # Calculate the slope
+    if x2 - x1 == 0:
+        # Avoid division by zero; handle vertical lines separately if necessary
+        return 999999999, y1
+
+    m = (y2 - y1) / (x2 - x1)
+    b = y1 - m * x1
+
+    return m, b
+
 
 def x_from_y(m, b, y):
     if m == 0:
@@ -576,6 +593,18 @@ def x_from_y(m, b, y):
 
     x = (y - b) / m
     return x
+
+@njit
+def numba_x_from_y(m, b, y):
+    if m == 0:
+        return 999999999
+
+    if m == 999999999:
+        return b
+
+    x = (y - b) / m
+    return x
+
 
 def list_pixels_in_triangle(v1, v2, v3, size):
     v1 = [int(v1[0]), int(v1[1])]
@@ -1160,6 +1189,123 @@ async def apply_texture(child, mesh, screen_width, screen_height, ignore_area=No
 
     return screen_array, screen_depth, [[int(min_x), int(max_x)], [int(min_y), int(max_y)]]
 
+@njit
+def numba_apply_texture(width, height, drawRange, texture_array, screenVertices, screen_width, screen_height, ignore_area=None):
+    vv = np.array([
+        [screenVertices[0][0], screenVertices[0][1]],
+        [screenVertices[1][0], screenVertices[1][1]],
+        [screenVertices[2][0], screenVertices[2][1]]
+    ], dtype=np.float32)
+
+    # Determine the bounding box of the triangle
+    min_x = np.min(vv[:, 0])
+    max_x = np.max(vv[:, 0])
+    min_y = np.min(vv[:, 1])
+    max_y = np.max(vv[:, 1])
+
+    m1, b1 = numba_find_line_equation(vv[0], vv[1])
+    m2, b2 = numba_find_line_equation(vv[1], vv[2])
+    m3, b3 = numba_find_line_equation(vv[2], vv[0])
+
+    range1 = [vv[0][1], vv[1][1]]
+    range2 = [vv[1][1], vv[2][1]]
+    range3 = [vv[2][1], vv[0][1]]
+
+    range1.sort()
+    range2.sort()
+    range3.sort()
+
+    def y_in_range(range, y):
+        return y >= range[0] and y <= range[1]
+
+    range_width = int(max_x - min_x)
+    range_height = int(max_y - min_y)
+
+    screen_array = np.zeros((range_width, range_height, 3), dtype=np.float32)
+    screen_depth = np.zeros((range_width, range_height), dtype=np.float32)
+
+    vertices = List()
+    vertices.append(List(screenVertices[0]))
+    vertices.append(List(screenVertices[1]))
+    vertices.append(List(screenVertices[2]))
+    #vertices = np.array([screenVertices[0], screenVertices[1], screenVertices[2]], dtype=np.float32)
+
+    # Unpack vertices
+    (x1, y1, z1), (x2, y2, z2), (x3, y3, z3) = vertices
+
+    # Vectors AB and AC
+    AB = np.array([x2 - x1, y2 - y1, z2 - z1])
+    AC = np.array([x3 - x1, y3 - y1, z3 - z1])
+
+    # Cross product to find the normal vector
+    n = np.cross(AB, AC)
+
+    # Plane equation coefficients
+    a, b, c = n
+    d = - (a * x1 + b * y1 + c * z1)
+
+    if c == 0:
+        c = 0.0001
+
+    for y in range(min_y, max_y + 1):
+        dy = y - min_y
+
+        xx = List()
+        if y_in_range(range1, y):
+            xx.append(numba_x_from_y(m1, b1, y))
+        if y_in_range(range2, y):
+            xx.append(numba_x_from_y(m2, b2, y))
+        if y_in_range(range3, y):
+            xx.append(numba_x_from_y(m3, b3, y))
+
+        x = 0
+        while x < len(xx):
+            if xx[x] == 999999999:
+                del xx[x]
+                x -= 1
+            x += 1
+
+        xx.sort()
+        xx0 = int(xx[0])
+
+        yy = (y - drawRange[1][0]) / drawRange[1][1]
+        yy = int(yy*(height-1))
+
+        z = 0
+
+        diff = math.ceil(xx[1] - xx[0])
+        if diff > 0:
+            x1 = ((xx[0] - drawRange[0][0]) / drawRange[0][1])*(width-1)
+            x2 = ((xx[1] - drawRange[0][0]) / drawRange[0][1])*(width-1)
+            xInc = (x2-x1) / (diff)
+
+            for i in range(0, int(diff)):
+                x = i+xx0
+                dx = (i+xx0) - min_x
+
+                if not (0 <= dx < range_width and 0 <= dy < range_height):
+                    continue
+
+                if x1 > 0 and x1 < texture_array.shape[0] and yy > 0 and yy <  texture_array.shape[1] and 0 < x < screen_width and 0 < y < screen_height:
+
+                    if i % 10 == 0:
+                        z = - (a * x + b * y + d) / c
+
+                    if ignore_area[x, y] > z:
+                        continue
+
+                    dx = int(dx)
+                    dy = int(dy)
+
+                    screen_array[dx, dy] = texture_array[int(x1), yy]
+                    screen_depth[dx, dy] = z #calculate_z(x, y, vertices)
+                    x1 += xInc
+
+    return screen_array, screen_depth, np.array([[int(min_x), int(max_x)], [int(min_y), int(max_y)]], dtype=np.int32)
+
+async def async_numba_apply_texture(width, height, drawRange, texture_array, screenVertices, screen_width, screen_height, ignore_area=None):
+    return numba_apply_texture(width, height, drawRange, texture_array, screenVertices, screen_width, screen_height, ignore_area)
+
 '''
 def apply_texture_chunk(texture_array, width, height, drawRange, screen_array, pixels):
     for pixel in pixels:
@@ -1398,12 +1544,19 @@ class Camera(Group):
 
                 if True:
                     if True:
-                        tasks.append(apply_texture(child, mesh, width, height, ignoreArea))
+                        #tasks.append(apply_texture(child, mesh, width, height, ignoreArea))
+
+                        screenVertices = [child.screenVertices[0].val, child.screenVertices[1].val, child.screenVertices[2].val]
+                        screenVertices = np.array(screenVertices, dtype=np.float32)
+                        drawRange = np.array(child.drawRange, dtype=np.float32)
+                        texture_array = np.array(mesh.texture_array, dtype=np.float32)
+                        _ignoreArea = np.array(ignoreArea, dtype=np.float32)
+                        tasks.append(async_numba_apply_texture(mesh.image.width, mesh.image.height, drawRange, texture_array, screenVertices, width, height, _ignoreArea))
                     else:
                         task = loop.run_in_executor(executor, run_async_in_executor, apply_texture, child, mesh, width, height, ignoreArea)
                         tasks.append(task)
 
-                    if len(tasks) >= num_cores*8:
+                    if len(tasks) >= num_cores:
                         print("starting rendering textures")
                         r = await asyncio.gather(*tasks)
                         calcIgnoreArea(r)
@@ -1417,7 +1570,9 @@ class Camera(Group):
                     res.append(r)
 
         if len(tasks) > 0:
+            print("starting rendering textures")
             r = await asyncio.gather(*tasks)
+            print("textures rendered")
             res.extend(r)
 
         depth = np.zeros((width, height))
@@ -1480,8 +1635,9 @@ async def main():
     else:
         mesh = Mesh()
         #mesh.loadModelTxt('flowers.txt')
-        mesh.loadModelTxt('supercar.txt')
-        #mesh.setTexture(Image.open('rainbow.jpeg'))
+        #mesh.loadModelTxt('supercar.txt')
+        mesh.loadModelTxt('pokemon.txt')
+        mesh.setTexture(Image.open('rainbow.jpeg'))
         scene.add(mesh)
 
         if False:
