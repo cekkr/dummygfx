@@ -213,7 +213,6 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     //rotatePoints(totPos_x, totPos_y, totPos_z, rot_x, rot_y, rot_z, res);
     rotatePoints(pos_x, pos_y, pos_z, rot_x, rot_y, rot_z, res);
     //rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);    
-    //rotatePoints(res[0], res[1], res[2], rot_x, rot_y, rot_z, res);
     
     /*res[0] += totPos_x;
     res[1] += totPos_y;
