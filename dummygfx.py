@@ -831,8 +831,19 @@ class Group(Point3D):
             if isinstance(child, Group):
                 child.transformCommands(pos, cmds, level+1)
             else:
-                child.commandPos = len(cmds)
-                cmds.append([child, Coordinate(), pos, level+1])
+                # fast check
+                if False:
+                    prev = len(cmds) - 9
+                    prev = prev if prev >= 0 else 0
+                    for i in range(prev, len(cmds)):
+                        cmd = cmds[i]
+                        if cmd[0].val == child.val and cmd[3] == (level+1):
+                            child.commandPos = i
+                            break
+
+                if child.commandPos == -1:
+                    child.commandPos = len(cmds)
+                    cmds.append([child, Coordinate(), pos, level+1])
 
         return cmds
 
