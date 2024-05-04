@@ -1550,7 +1550,8 @@ class Camera(Group):
         textureArrays = []
         options = []
 
-        def calcIgnoreArea(res):
+        @njit
+        def calcIgnoreArea(res, ignoreArea):
             for r in res:
                 z = r[1]
                 txtRange = r[2]
@@ -1569,17 +1570,18 @@ class Camera(Group):
                             if d == 0 or zz < d:
                                 ignoreArea[dx, dy] = zz
 
+            return ignoreArea
+
         loop = asyncio.get_running_loop()
 
         def execDraw():
             _screenVertices = np.array(screenVertices, dtype=np.float32)
             _drawRanges = np.array(drawRanges, dtype=np.float32)
             _textureArrays = np.array(textureArrays, dtype=np.float32)
-            #_ignoreArea = np.array(ignoreArea, dtype=np.float32)
             _options = np.array(options, dtype=np.float32)
 
             if True:
-                tasks.append(async_multiple_numba_apply_texture(_drawRanges, _textureArrays, _screenVertices, None, _options))
+                tasks.append(async_multiple_numba_apply_texture(_drawRanges, _textureArrays, _screenVertices, ignoreArea, _options))
             else:
                 r = multiple_numba_apply_texture(_drawRanges, _textureArrays, _screenVertices, _ignoreArea, _options)
                 res.extend(r)
@@ -1606,7 +1608,7 @@ class Camera(Group):
                         options.append([mesh.image.width, mesh.image.height, width, height])
                         numOps += 1
 
-                        if numOps > 8:
+                        if numOps > 16:
                             execDraw()
                             numOps = 0
 
@@ -1615,13 +1617,13 @@ class Camera(Group):
                         task = loop.run_in_executor(executor, run_async_in_executor, apply_texture, child, mesh, width, height, ignoreArea)
                         tasks.append(task)
 
-                    if len(tasks) >= 4:
+                    if len(tasks) >= 8:
                         print("starting rendering textures")
                         r = await asyncio.gather(*tasks)
-                        #calcIgnoreArea(r)
                         print("textures rendered")
 
                         for i in range(0, len(r)):
+                            ignoreArea = calcIgnoreArea(r[i], ignoreArea)
                             res.extend(r[i])
 
                         tasks = []
@@ -1715,9 +1717,9 @@ async def main():
     else:
         if True:
             mesh = Mesh()
-            #mesh.loadModelTxt('flowers.txt')
+            mesh.loadModelTxt('flowers.txt')
             #mesh.loadModelTxt('supercar.txt')
-            mesh.loadModelTxt('pokemon.txt')
+            #mesh.loadModelTxt('pokemon.txt')
             mesh.setTexture(Image.open('rainbow.jpeg'))
             scene.add(mesh)
 
