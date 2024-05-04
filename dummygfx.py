@@ -721,9 +721,8 @@ class Point3D:
     def __init__(self):
         self.position = Coordinate()
         self.rotation = Coordinate()
-        self.transformed = None
-        self.transformedRotation = None
         self.parent = None
+        self.commandPos = -1
 
 class Camera(Point3D):
     def __init__(self):
@@ -1240,7 +1239,6 @@ def numba_apply_texture(width, height, drawRange, texture_array, screenVertices,
     vertices.append(List(screenVertices[0]))
     vertices.append(List(screenVertices[1]))
     vertices.append(List(screenVertices[2]))
-    #vertices = np.array([screenVertices[0], screenVertices[1], screenVertices[2]], dtype=np.float32)
 
     # Unpack vertices
     (x1, y1, z1), (x2, y2, z2), (x3, y3, z3) = vertices
@@ -1301,7 +1299,7 @@ def numba_apply_texture(width, height, drawRange, texture_array, screenVertices,
 
                 if x1 > 0 and x1 < texture_array.shape[0] and yy > 0 and yy <  texture_array.shape[1] and 0 < x < screen_width and 0 < y < screen_height:
 
-                    if i % 2 == 0:
+                    if i % 4 == 0:
                         z = - (a * x + b * y + d) / c
 
                     if ignore_area is not None and ignore_area[x, y] > z:
@@ -1656,7 +1654,7 @@ class Camera(Group):
                 txtRange = r[2]
                 hasPixels = r[3]
 
-                if not hasPixels:
+                if hasPixels == 0:
                     continue
 
                 for x in range(0, txtRange[0][1]-txtRange[0][0]):
@@ -1694,10 +1692,11 @@ async def main():
 
     scene = Scene()
 
-    point = Point3D()
-    point.position = Coordinate([0,1,1])
+    if True:
 
-    if False:
+        point = Point3D()
+        point.position = Coordinate([0, 1, 1])
+
         triangle = Triangle()
         triangle.vertices[0] = Coordinate([0,1,0])
         triangle.vertices[1] = Coordinate([-1,0,0])
@@ -1713,7 +1712,7 @@ async def main():
         mesh.position.z = -1
         mesh.setTexture(Image.open('rainbow.jpeg'))
 
-        scene.add(point)
+        #scene.add(point)
         scene.add(triangle)
         scene.add(mesh)
     else:
