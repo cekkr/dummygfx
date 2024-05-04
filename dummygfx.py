@@ -238,9 +238,9 @@ __kernel void calculateCommands(__global float *mainCoords, __global float *requ
     
     //if(parent >= 3) printf("%f \\n", res[2]);
     
-    results[idx+3] = rot_x;
-    results[idx+4] = rot_y;
-    results[idx+5] = rot_z;
+    //results[idx+3] = rot_x;
+    //results[idx+4] = rot_y;
+    //results[idx+5] = rot_z;
     
     for(int i=0; i<3; i++) requests[idx+i] = results[idx+i];
 }
@@ -291,9 +291,9 @@ def synchronous_cl_commands(cmds, position, rotation):
     # Read back the results
     if False:
         for level in range(0, maxLevel + 1):
-            level = maxLevel - level
+            #level = maxLevel - level
             kernel = cl.Kernel(programCommands, "calculateCommands")
-            kernel.set_args(mainCoords_buf, requests_buf, parents_buf, np.int32(num_points), np.int32(level))
+            kernel.set_args(mainCoords_buf, requests_buf, results_buf, parents_buf, np.int32(num_points), np.int32(level))
             global_work_size = (num_points,)
             local_work_size = None  # or some value if needed
             cl.enqueue_nd_range_kernel(queue, kernel, global_work_size, local_work_size)
@@ -305,7 +305,7 @@ def synchronous_cl_commands(cmds, position, rotation):
                 #accResults_buf = cl.Buffer(context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR, hostbuf=results)
                 programCommands.calculateCommands(queue, (num_points,), None, mainCoords_buf, requests_buf, results_buf, parents_buf, np.int32(num_points), np.int32(level))
                 #cl.enqueue_copy(queue, results, results_buf)
-                queue.finish()
+                #queue.finish()
 
         if False:
             for level in range(0, maxLevel+1):
@@ -1304,7 +1304,7 @@ def numba_apply_texture(width, height, drawRange, texture_array, screenVertices,
                     if i % 2 == 0:
                         z = - (a * x + b * y + d) / c
 
-                    if ignore_area[x, y] > z:
+                    if ignore_area is not None and ignore_area[x, y] > z:
                         continue
 
                     dx = int(dx)
@@ -1319,6 +1319,22 @@ def numba_apply_texture(width, height, drawRange, texture_array, screenVertices,
 
 async def async_numba_apply_texture(width, height, drawRange, texture_array, screenVertices, screen_width, screen_height, ignore_area=None):
     return numba_apply_texture(width, height, drawRange, texture_array, screenVertices, screen_width, screen_height, ignore_area)
+
+@njit
+def multiple_numba_apply_texture(drawRanges, textureArrays, screenVertices, ignore, options):
+    res = []
+
+    for i in range(0, len(options)):
+        opt = options[i]
+        r = numba_apply_texture(opt[0], opt[1], drawRanges[i], textureArrays[i], screenVertices[i], opt[2], opt[3],
+                            ignore)
+        res.append(r)
+
+    return res
+
+async def async_multiple_numba_apply_texture(drawRanges, textureArrays, screenVertices, ignore, options):
+    return multiple_numba_apply_texture(drawRanges, textureArrays, screenVertices, ignore, options)
+
 
 '''
 def apply_texture_chunk(texture_array, width, height, drawRange, screen_array, pixels):
@@ -1528,6 +1544,11 @@ class Camera(Group):
         res = []
 
         ignoreArea = np.full((width, height), 0)
+        numOps = 0
+        screenVertices = []
+        drawRanges = []
+        textureArrays = []
+        options = []
 
         def calcIgnoreArea(res):
             for r in res:
@@ -1549,6 +1570,27 @@ class Camera(Group):
                                 ignoreArea[dx, dy] = zz
 
         loop = asyncio.get_running_loop()
+
+        def execDraw():
+            _screenVertices = np.array(screenVertices, dtype=np.float32)
+            _drawRanges = np.array(drawRanges, dtype=np.float32)
+            _textureArrays = np.array(textureArrays, dtype=np.float32)
+            #_ignoreArea = np.array(ignoreArea, dtype=np.float32)
+            _options = np.array(options, dtype=np.float32)
+
+            if True:
+                tasks.append(async_multiple_numba_apply_texture(_drawRanges, _textureArrays, _screenVertices, None, _options))
+            else:
+                r = multiple_numba_apply_texture(_drawRanges, _textureArrays, _screenVertices, _ignoreArea, _options)
+                res.extend(r)
+
+            #calcIgnoreArea(res)
+
+            screenVertices.clear()
+            drawRanges.clear()
+            textureArrays.clear()
+            options.clear()
+
         for mesh in drawTexture:
             for child in mesh.children:
                 if child.drawRange[0][1] == 0 or child.drawRange[1][1] == 0:
@@ -1558,34 +1600,46 @@ class Camera(Group):
                     if True:
                         #tasks.append(apply_texture(child, mesh, width, height, ignoreArea))
 
-                        screenVertices = [child.screenVertices[0].val, child.screenVertices[1].val, child.screenVertices[2].val]
-                        screenVertices = np.array(screenVertices, dtype=np.float32)
-                        drawRange = np.array(child.drawRange, dtype=np.float32)
-                        texture_array = np.array(mesh.texture_array, dtype=np.float32)
-                        _ignoreArea = np.array(ignoreArea, dtype=np.float32)
-                        tasks.append(async_numba_apply_texture(mesh.image.width, mesh.image.height, drawRange, texture_array, screenVertices, width, height, _ignoreArea))
+                        screenVertices.append([child.screenVertices[0].val, child.screenVertices[1].val, child.screenVertices[2].val])
+                        drawRanges.append(child.drawRange)
+                        textureArrays.append(mesh.texture_array)
+                        options.append([mesh.image.width, mesh.image.height, width, height])
+                        numOps += 1
+
+                        if numOps > 8:
+                            execDraw()
+                            numOps = 0
+
+                        #tasks.append(async_numba_apply_texture(mesh.image.width, mesh.image.height, drawRange, texture_array, screenVertices, width, height, _ignoreArea))
                     else:
                         task = loop.run_in_executor(executor, run_async_in_executor, apply_texture, child, mesh, width, height, ignoreArea)
                         tasks.append(task)
 
-                    if len(tasks) >= 128:
+                    if len(tasks) >= 4:
                         print("starting rendering textures")
                         r = await asyncio.gather(*tasks)
-                        calcIgnoreArea(r)
+                        #calcIgnoreArea(r)
                         print("textures rendered")
-                        res.extend(r)
-                        tasks = []
 
+                        for i in range(0, len(r)):
+                            res.extend(r[i])
+
+                        tasks = []
                 else:
                     r = await apply_texture(child, mesh, width, height, ignoreArea)
                     calcIgnoreArea(r)
                     res.append(r)
 
+        if numOps > 0:
+            execDraw()
+
         if len(tasks) > 0:
             print("starting rendering textures")
             r = await asyncio.gather(*tasks)
             print("textures rendered")
-            res.extend(r)
+
+            for i in range(0, len(r)):
+                res.extend(r[i])
 
         @njit()
         def calcScreen(res, width, height, screen_array):
@@ -1662,9 +1716,9 @@ async def main():
         if True:
             mesh = Mesh()
             #mesh.loadModelTxt('flowers.txt')
-            mesh.loadModelTxt('supercar.txt')
-            #mesh.loadModelTxt('pokemon.txt')
-            #mesh.setTexture(Image.open('rainbow.jpeg'))
+            #mesh.loadModelTxt('supercar.txt')
+            mesh.loadModelTxt('pokemon.txt')
+            mesh.setTexture(Image.open('rainbow.jpeg'))
             scene.add(mesh)
 
         if False:
