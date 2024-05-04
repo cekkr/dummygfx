@@ -1326,7 +1326,7 @@ def multiple_numba_apply_texture(drawRanges, textureArrays, screenVertices, igno
 
     for i in range(0, len(options)):
         opt = options[i]
-        r = numba_apply_texture(opt[0], opt[1], drawRanges[i], textureArrays[i], screenVertices[i], opt[2], opt[3],
+        r = numba_apply_texture(opt[0], opt[1], drawRanges[i], textureArrays, screenVertices[i], opt[2], opt[3],
                             ignore)
         res.append(r)
 
@@ -1577,11 +1577,11 @@ class Camera(Group):
         def execDraw():
             _screenVertices = np.array(screenVertices, dtype=np.float32)
             _drawRanges = np.array(drawRanges, dtype=np.float32)
-            _textureArrays = np.array(textureArrays, dtype=np.float32)
+            #_textureArrays = np.array(textureArrays, dtype=np.float32)
             _options = np.array(options, dtype=np.float32)
 
             if True:
-                tasks.append(async_multiple_numba_apply_texture(_drawRanges, _textureArrays, _screenVertices, ignoreArea, _options))
+                tasks.append(async_multiple_numba_apply_texture(_drawRanges, textureArrays, _screenVertices, ignoreArea, _options))
             else:
                 r = multiple_numba_apply_texture(_drawRanges, _textureArrays, _screenVertices, _ignoreArea, _options)
                 res.extend(r)
@@ -1590,10 +1590,12 @@ class Camera(Group):
 
             screenVertices.clear()
             drawRanges.clear()
-            textureArrays.clear()
             options.clear()
 
         for mesh in drawTexture:
+
+            textureArrays = np.array(mesh.texture_array)
+
             for child in mesh.children:
                 if child.drawRange[0][1] == 0 or child.drawRange[1][1] == 0:
                     continue
@@ -1604,7 +1606,6 @@ class Camera(Group):
 
                         screenVertices.append([child.screenVertices[0].val, child.screenVertices[1].val, child.screenVertices[2].val])
                         drawRanges.append(child.drawRange)
-                        textureArrays.append(mesh.texture_array)
                         options.append([mesh.image.width, mesh.image.height, width, height])
                         numOps += 1
 
@@ -1632,16 +1633,17 @@ class Camera(Group):
                     calcIgnoreArea(r)
                     res.append(r)
 
-        if numOps > 0:
-            execDraw()
+            if numOps > 0:
+                execDraw()
 
-        if len(tasks) > 0:
-            print("starting rendering textures")
-            r = await asyncio.gather(*tasks)
-            print("textures rendered")
+            if len(tasks) > 0:
+                print("starting rendering textures")
+                r = await asyncio.gather(*tasks)
+                print("textures rendered")
 
-            for i in range(0, len(r)):
-                res.extend(r[i])
+                for i in range(0, len(r)):
+                    ignoreArea = calcIgnoreArea(r[i], ignoreArea)
+                    res.extend(r[i])
 
         @njit()
         def calcScreen(res, width, height, screen_array):
