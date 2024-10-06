@@ -1692,7 +1692,7 @@ async def main():
 
     scene = Scene()
 
-    if True:
+    if False:
 
         point = Point3D()
         point.position = Coordinate([0, 1, 1])
@@ -1721,7 +1721,7 @@ async def main():
             mesh.loadModelTxt('flowers.txt')
             #mesh.loadModelTxt('supercar.txt')
             #mesh.loadModelTxt('pokemon.txt')
-            mesh.setTexture(Image.open('rainbow.jpeg'))
+            #mesh.setTexture(Image.open('rainbow.jpeg'))
             scene.add(mesh)
 
         if False:
